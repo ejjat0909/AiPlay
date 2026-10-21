@@ -684,14 +684,16 @@ AiPlay/
 
 Acceptance criteria:
 
-- [ ] App builds to ≤ 1.5 MB APK with `tools/build.sh`, signed, installable.
-- [ ] Splash plays as specified in §9.2 and is skippable.
-- [ ] Home shows a verdict for P1–P5 with evidence rows.
-- [ ] `Enable Android Auto` executes the privileged command when `su` exists, and
+- [x] App builds to ≤ 1.5 MB APK with `tools/build.sh`, signed, installable (217 KB).
+- [x] Splash plays as specified in §9.2 and is skippable.
+- [x] Home shows a verdict for P1–P5 with evidence rows.
+- [x] `Enable Android Auto` executes the privileged command when `su` exists, and
       falls back to the ADB recipe otherwise.
-- [ ] Receiver advertises `_androidauto._tcp` and accepts a TLS connection.
-- [ ] Frame codec + readiness engine covered by unit tests; all pass.
-- [ ] Docs: PLAN, REA analysis, compatibility, protocol, build, testing.
+- [x] Receiver advertises `_androidauto._tcp` and accepts a TLS connection.
+- [x] Frame codec + readiness engine covered by unit tests; all pass (53 tests).
+- [x] Docs: PLAN, REA analysis, compatibility, protocol, build, testing.
+- [ ] Install on a physical head unit (blocked: no device in this workspace; see
+      docs/TESTING.md §6).
 
 ### M2 — v0.2.0 "Projection" (next)
 

@@ -36,7 +36,7 @@ The condition model (P1–P5) is documented in [PLAN.md §2](PLAN.md) and
 | --- | --- |
 | Capability audit | **working**, unit-tested |
 | Enable / repair Android Auto | **working** where a root shell exists, ADB recipe otherwise |
-| Wireless receiver: discovery, TLS, AA control plane | **implemented and unit-tested**, not yet verified against a live phone |
+| Wireless receiver: discovery, TLS, AA control plane | **implemented and unit-tested** (real TLS loopback handshake), not yet verified against a live phone |
 | Receiver: video / audio / touch channels | **not implemented** — milestone 0.2.0 |
 
 The receiver is honest about this: it labels itself *handshake only (experimental)* in the app
