@@ -61,6 +61,9 @@ fi
 
 echo "== launch + receiver =="
 "${ADB[@]}" logcat -c
+# The first full-screen app on a device shows Android's "Viewing full screen / Got it" box over the
+# picture. It is a system dialog, not an AiPlay bug, but it ruins the screenshot: pre-confirm it.
+"${ADB[@]}" shell settings put secure immersive_mode_confirmations confirmed >/dev/null 2>&1
 # AaReceiverService is not exported on purpose, so `am start-foreground-service` is denied for the
 # shell uid. The launcher activity is exported: ask the app to start its own receiver.
 "${ADB[@]}" shell am start -W -n "$PKG/.ui.SplashActivity" \
@@ -105,7 +108,18 @@ SHOT="$ROOT/build/device-test-video.png"
 rm -f "$SHOT"
 if [ -f "$ROOT/tools/aa-probe.py" ]; then
   # The clip is 3 s at 30 fps: grab the screen while it is playing.
-  ( sleep 2; "${ADB[@]}" exec-out screencap -p > "$SHOT" 2>/dev/null ) &
+  # Take the screenshot once the first picture has been rendered (a slow decoder can need several
+  # seconds), not after a fixed delay, which usually caught the home screen.
+  (
+    for _ in $(seq 1 60); do
+      if "${ADB[@]}" logcat -d -v brief -s AiPlay:D 2>/dev/null | grep -q "video: first picture rendered"; then
+        sleep 0.6
+        "${ADB[@]}" exec-out screencap -p > "$SHOT" 2>/dev/null
+        break
+      fi
+      sleep 0.5
+    done
+  ) &
   SHOT_PID=$!
   python3 "$ROOT/tools/aa-probe.py" 127.0.0.1 --port "$PORT"
   PROBE_STATUS=$?

@@ -156,6 +156,7 @@ final class VideoDecoder {
     /** Keeps pictures from the latest keyframe on, so a late decoder can still start cleanly. */
     private void hold(Picture picture) {
         if (picture.keyframe) {
+            dropped += pending.size(); // superseded by this newer keyframe
             pending.clear();
             pendingBytes = 0;
         } else if (pending.isEmpty()) {
@@ -164,9 +165,9 @@ final class VideoDecoder {
         }
         if (pending.size() >= PENDING_MAX_PICTURES
                 || pendingBytes + picture.data.length > PENDING_MAX_BYTES) {
+            dropped += pending.size() + 1;
             pending.clear();
             pendingBytes = 0;
-            dropped++;
             return;
         }
         pending.add(picture);

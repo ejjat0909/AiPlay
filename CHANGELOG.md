@@ -21,12 +21,24 @@ Found by the user on an API 34 emulator (`c2.goldfish.h264.decoder`): the decode
 * The stop line reports input stalls (`decoder stopped: 90 fed, 0 dropped, 13 input stall(s)`), so a slow
   decoder is visible in the log.
 
+### Changed (test rig and counters, same version)
+
+* `device-test.sh` takes its screenshot right after `first picture rendered` instead of 2 s in (on a slow
+  decoder that caught the home screen in 7 of 10 runs), and pre-confirms Android's "Viewing full screen /
+  Got it" box (`settings put secure immersive_mode_confirmations confirmed`) so it does not sit on the
+  picture. That box is a system dialog shown the first time any app goes immersive; it is not an AiPlay
+  bug and the video renders underneath it, but on a real unit it needs one tap.
+* Pictures discarded while waiting for the screen (superseded by a newer keyframe) now count as dropped, so
+  `fed + dropped` adds up to the pictures received. Before, runs printed `60 fed, 0 dropped` for 90 sent.
+
 ### Verified
 
-* API 34 x86_64 emulator on a Large VM, swap-starved: with the old code 0-4 pictures were fed. With this
-  change two of three runs rendered, one of them with 90 fed / 0 dropped. The third run did not render:
-  the log was overwritten before it could be read, so the cause is not confirmed (the projection screen
-  opened after the clip ended is the likely reason, and was seen once before this change).
+* API 34 x86_64 emulator on an XL VM (8 GiB, no swap, `c2.goldfish.h264.decoder`), 10 runs of
+  `device-test.sh` before the rig change and 10 after: 20 of 20 exit 0. After the change all 10 screenshots
+  show the full test pattern (`90 fed, 0 dropped` in each).
+* The earlier Large-VM run that did not render was not reproduced and is still unexplained; that emulator
+  was running on swap.
+* Not verified: real hardware, and the user's `emulator-5556`.
 
 ## [0.2.0-alpha2] — 2026-10-21
 
