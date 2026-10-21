@@ -4,13 +4,13 @@ import android.content.Context;
 
 import com.ejjat.aiplay.R;
 import com.ejjat.aiplay.core.aa.AaControl;
+import com.ejjat.aiplay.core.aa.AaCryptor;
 import com.ejjat.aiplay.core.aa.AaProtocolException;
 import com.ejjat.aiplay.core.aa.AaSession;
 import com.ejjat.aiplay.device.Diag;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -18,26 +18,27 @@ import java.security.KeyStore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
 
 /**
- * Android Auto wireless endpoint: a TLS listener that speaks the AA control plane.
+ * Android Auto wireless endpoint: a plain TCP listener that speaks the AA protocol.
  *
- * <p>Scope in 0.1.0: TLS, frame codec, version negotiation, auth, service discovery and channel
- * open responses. Video, audio and input channels are not implemented yet; the session log records
- * exactly what the phone asked for so the next milestone has real evidence to build on.</p>
+ * <p>The socket carries plain AA frames, as it does on a real head unit. TLS is not on the socket:
+ * the session runs the TLS 1.2 handshake <em>inside</em> {@code SSL_HANDSHAKE} messages with this
+ * side as the TLS client, then encrypts every frame ({@link AaCryptor}, {@link AaSession}).
+ * 0.1.x to 0.2.0-alpha3 ran a TLS server on the socket instead ({@code AaTlsServer}), which a real
+ * phone would not have connected to.</p>
+ *
+ * <p>Scope: version negotiation, in-band TLS, auth, service discovery, ping, and the video channel.
+ * The session log records exactly what the phone asked for.</p>
  */
-public final class AaTlsServer {
+public final class AaServer {
 
     public interface Listener {
         void onEvent(String message);
     }
 
-    private static final String KEYSTORE_PASSWORD = "aiplay";
+    private static final String IDENTITY_PASSWORD = "aiplay";
     private static final AtomicInteger SESSIONS = new AtomicInteger();
 
     private final Context context;
@@ -45,10 +46,11 @@ public final class AaTlsServer {
     private final Listener listener;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
+    private SSLContext tlsContext;
     private ServerSocket serverSocket;
     private Thread acceptThread;
 
-    public AaTlsServer(Context context, int port, Listener listener) {
+    public AaServer(Context context, int port, Listener listener) {
         this.context = context.getApplicationContext();
         this.port = port;
         this.listener = listener;
@@ -66,14 +68,17 @@ public final class AaTlsServer {
         if (!running.compareAndSet(false, true)) {
             return;
         }
-        SSLContext sslContext = buildContext();
-        SSLServerSocket socket = (SSLServerSocket) sslContext.getServerSocketFactory()
-                .createServerSocket();
-        socket.setReuseAddress(true);
-        socket.setEnabledProtocols(new String[]{"TLSv1.2", "TLSv1.3"});
-        socket.bind(new InetSocketAddress(port));
-        serverSocket = socket;
-        event("listening on tcp " + port + " (TLS)");
+        try {
+            tlsContext = buildClientContext();
+            ServerSocket socket = new ServerSocket();
+            socket.setReuseAddress(true);
+            socket.bind(new InetSocketAddress(port));
+            serverSocket = socket;
+        } catch (Exception error) {
+            running.set(false);
+            throw error;
+        }
+        event("listening on tcp " + port + " (plain AA; TLS runs inside the protocol)");
 
         acceptThread = new Thread(new Runnable() {
             @Override
@@ -95,19 +100,20 @@ public final class AaTlsServer {
         event("stopped");
     }
 
-    private SSLContext buildContext() throws Exception {
+    /**
+     * The head unit's TLS client identity (the committed, legacy-encrypted PKCS12 — see
+     * {@code ReceiverIdentityTest}). It is AiPlay's own self-signed certificate; no credential
+     * issued to another vendor is used.
+     */
+    private SSLContext buildClientContext() throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         InputStream input = context.getResources().openRawResource(R.raw.receiver_identity);
         try {
-            keyStore.load(input, KEYSTORE_PASSWORD.toCharArray());
+            keyStore.load(input, IDENTITY_PASSWORD.toCharArray());
         } finally {
             input.close();
         }
-        KeyManagerFactory factory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        factory.init(keyStore, KEYSTORE_PASSWORD.toCharArray());
-        SSLContext sslContext = SSLContext.getInstance("TLS");
-        sslContext.init(factory.getKeyManagers(), null, null);
-        return sslContext;
+        return AaCryptor.clientContext(keyStore, IDENTITY_PASSWORD.toCharArray());
     }
 
     private void acceptLoop() {
@@ -115,10 +121,10 @@ public final class AaTlsServer {
             Socket socket = null;
             try {
                 socket = serverSocket.accept();
-                final SSLSocket session = (SSLSocket) socket;
-                session.setUseClientMode(false);
-                int id = SESSIONS.incrementAndGet();
-                event("session " + id + " accepted from " + session.getInetAddress().getHostAddress());
+                final Socket session = socket;
+                final int id = SESSIONS.incrementAndGet();
+                event("session " + id + " accepted from "
+                        + session.getInetAddress().getHostAddress());
                 Thread worker = new Thread(new Runnable() {
                     @Override
                     public void run() {
@@ -135,21 +141,10 @@ public final class AaTlsServer {
         }
     }
 
-    private void handle(SSLSocket socket, int id) {
+    private void handle(Socket socket, int id) {
         try {
             socket.setSoTimeout(15000);
-            try {
-                socket.startHandshake();
-            } catch (SSLException error) {
-                // Usually a bare TCP connect-and-close (a readiness check, a port scanner, adb
-                // forward with nothing behind it): no ClientHello, nothing to answer. Say that,
-                // but keep the real reason so a genuine TLS incompatibility is not hidden.
-                event("session " + id + ": TLS never completed (port probe or incompatible "
-                        + "client): " + error.getMessage());
-                return;
-            }
-            event("session " + id + ": tls handshake ok, cipher "
-                    + socket.getSession().getCipherSuite());
+            socket.setTcpNoDelay(true);
 
             AaControl.ServiceDiscoveryConfig discovery = new AaControl.ServiceDiscoveryConfig();
             discovery.headUnitName = "AiPlay";
@@ -163,20 +158,21 @@ public final class AaTlsServer {
                         public void onEvent(String message) {
                             Diag.log("receiver", message);
                         }
-                    }, discovery);
+                    }, discovery, new AaCryptor(tlsContext));
             session.setVideoSink(ProjectionHub.get(context));
             session.begin();
 
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[65536];
             while (running.get()) {
                 if (session.pump(buffer) < 0) {
                     break;
                 }
             }
         } catch (AaProtocolException error) {
-            event("protocol error: " + error.getMessage());
+            event("session " + id + ": protocol error: " + error.getMessage());
         } catch (Exception error) {
-            event("session ended: " + error.getClass().getSimpleName() + " " + error.getMessage());
+            event("session " + id + " ended: " + error.getClass().getSimpleName() + " "
+                    + error.getMessage());
         } finally {
             closeQuietly(socket);
         }

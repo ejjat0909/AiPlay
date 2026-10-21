@@ -11,9 +11,16 @@ import java.nio.charset.Charset;
  */
 public final class AaControl {
 
-    /** Protocol version AiPlay announces. Matches what modern aasdk-based receivers request. */
+    /**
+     * Protocol version AiPlay announces: aasdk's {@code AASDK_MAJOR = 1, AASDK_MINOR = 1}
+     * ({@code include/f1x/aasdk/Version.hpp}). 0.1.x–0.2.0-alpha3 sent 1.6, which had no source.
+     */
     public static final int PROTOCOL_MAJOR = 1;
-    public static final int PROTOCOL_MINOR = 6;
+    public static final int PROTOCOL_MINOR = 1;
+
+    /** {@code VersionResponseStatus.Enum}: MATCH = 0, MISMATCH = 0xFFFF. */
+    public static final int VERSION_MATCH = 0;
+    public static final int VERSION_MISMATCH = 0xFFFF;
 
     /** {@code Status.Enum}: OK = 0, FAIL = 1. */
     public static final int STATUS_OK = 0;
@@ -35,15 +42,22 @@ public final class AaControl {
     }
 
     /**
-     * {@code VersionRequest}: {@code major = 1}, {@code minor = 2}.
-     * Sent by the head unit immediately after the TLS session is established.
+     * The version request. <strong>Not protobuf</strong>: aasdk writes two big-endian 16-bit
+     * numbers, {@code [major u16][minor u16]} (ControlServiceChannel::sendVersionRequest).
+     * 0.1.x sent a protobuf here, which happens to also be four bytes long but reads as garbage.
      */
     public static byte[] versionRequest() {
         return versionRequest(PROTOCOL_MAJOR, PROTOCOL_MINOR);
     }
 
     public static byte[] versionRequest(int major, int minor) {
-        return new ProtoWriter().varint(1, major).varint(2, minor).toByteArray();
+        return new byte[]{(byte) (major >>> 8), (byte) major, (byte) (minor >>> 8), (byte) minor};
+    }
+
+    /** The phone's answer: {@code [major u16][minor u16][status u16]}, big endian, raw. */
+    public static byte[] versionResponse(int major, int minor, int status) {
+        return new byte[]{(byte) (major >>> 8), (byte) major, (byte) (minor >>> 8), (byte) minor,
+                (byte) (status >>> 8), (byte) status};
     }
 
     /** {@code AuthCompleteIndication}: {@code status = 1} ({@code Status.Enum}). */
@@ -94,33 +108,22 @@ public final class AaControl {
         return response.toByteArray();
     }
 
-    /** Reads a {@code VersionResponse} defensively; missing fields fall back to {@code -1}. */
+    /**
+     * Reads a version response: up to three big-endian 16-bit numbers. As in aasdk
+     * ({@code handleVersionResponse}) a missing status counts as a mismatch.
+     */
     public static VersionResponse parseVersionResponse(byte[] payload) {
         VersionResponse result = new VersionResponse();
-        ProtoReader reader = new ProtoReader(payload);
-        try {
-            while (reader.hasMore()) {
-                int tag = reader.readTag();
-                switch (ProtoReader.field(tag)) {
-                    case 1:
-                        result.major = (int) reader.readVarint();
-                        break;
-                    case 2:
-                        result.minor = (int) reader.readVarint();
-                        break;
-                    case 3:
-                        result.status = (int) reader.readVarint();
-                        break;
-                    default:
-                        reader.skip(ProtoReader.wireType(tag));
-                        break;
-                }
-            }
-        } catch (AaProtocolException ignored) {
-            // A malformed version response is reported by the caller through result.complete.
-        }
-        result.complete = result.major >= 0 && result.minor >= 0;
+        int elements = payload.length / 2;
+        result.major = elements > 0 ? u16(payload, 0) : -1;
+        result.minor = elements > 1 ? u16(payload, 2) : -1;
+        result.status = elements > 2 ? u16(payload, 4) : VERSION_MISMATCH;
+        result.complete = elements >= 3;
         return result;
+    }
+
+    private static int u16(byte[] data, int offset) {
+        return ((data[offset] & 0xFF) << 8) | (data[offset + 1] & 0xFF);
     }
 
     /** Parsed {@code VersionResponse}. */
@@ -130,9 +133,14 @@ public final class AaControl {
         public int status = -1;
         public boolean complete;
 
+        public boolean matches() {
+            return status == VERSION_MATCH;
+        }
+
         @Override
         public String toString() {
-            return "version " + major + "." + minor + " status=" + status;
+            return "version " + major + "." + minor + " status="
+                    + (status == VERSION_MISMATCH ? "MISMATCH" : String.valueOf(status));
         }
     }
 

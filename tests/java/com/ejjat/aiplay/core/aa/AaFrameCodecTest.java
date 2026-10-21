@@ -22,11 +22,21 @@ import java.util.List;
 public class AaFrameCodecTest {
 
     @Test
-    public void encodesChannelFlagsSizeAndMessageId() {
-        // control channel, BULK|CONTROL flags, 4-byte payload (2 id + 2 protobuf)
-        byte[] frame = AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.VERSION_REQUEST,
-                new byte[]{0x08, 0x01});
-        assertArrayEquals(new byte[]{0x00, 0x07, 0x00, 0x04, 0x00, 0x01, 0x08, 0x01}, frame);
+    public void controlChannelMessagesAreSpecificNotControl() {
+        // aasdk sends channel-0 messages as MessageType::SPECIFIC: flags = BULK only (0x03).
+        // [channel 0][flags 0x03][size 6][id 0x0001][major 1][minor 1]
+        byte[] frame = AaFrameCodec.encode(AaChannel.CONTROL, false, AaMessageType.VERSION_REQUEST,
+                AaControl.versionRequest());
+        assertArrayEquals(new byte[]{0x00, 0x03, 0x00, 0x06, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01},
+                frame);
+    }
+
+    @Test
+    public void channelOpenIsControlTypedOnItsOwnChannel() {
+        // video channel, BULK|CONTROL = 0x07, id 0x0008 (ChannelOpenResponse), status OK = 08 00
+        byte[] frame = AaFrameCodec.encode(AaChannel.VIDEO, true,
+                AaMessageType.CHANNEL_OPEN_RESPONSE, new byte[]{0x08, 0x00});
+        assertArrayEquals(new byte[]{0x03, 0x07, 0x00, 0x04, 0x00, 0x08, 0x08, 0x00}, frame);
     }
 
     @Test
@@ -41,7 +51,8 @@ public class AaFrameCodecTest {
         AaFrame decoded = AaFrameCodec.decode(
                 AaFrameCodec.encode(AaFrame.control(AaMessageType.PING_REQUEST, new byte[0])));
         assertEquals(AaChannel.CONTROL, decoded.channel);
-        assertTrue(decoded.control);
+        assertTrue(!decoded.control);
+        assertTrue(decoded.isControlId());
         assertEquals(AaMessageType.PING_REQUEST, decoded.messageId);
         assertEquals(0, decoded.payload.length);
     }
@@ -211,5 +222,106 @@ public class AaFrameCodecTest {
         assertTrue(AaMessageType.isKnown(0x0013));
         assertTrue(!AaMessageType.isKnown(0x0100));
         assertEquals("video", AaChannel.name(AaChannel.VIDEO));
+    }
+
+    /** A cipher that visibly changes sizes, like TLS does: 3 bytes of overhead and an XOR. */
+    private static final class FakeCipher implements AaFrameCodec.Cipher {
+        @Override
+        public byte[] encrypt(byte[] data, int offset, int length) {
+            byte[] out = new byte[length + 3];
+            out[0] = out[1] = out[2] = (byte) 0xEE;
+            for (int i = 0; i < length; i++) {
+                out[3 + i] = (byte) (data[offset + i] ^ 0x5A);
+            }
+            return out;
+        }
+
+        @Override
+        public byte[] decrypt(byte[] data, int offset, int length) throws AaProtocolException {
+            if (length < 3 || data[offset] != (byte) 0xEE) {
+                throw new AaProtocolException("not a FakeCipher record");
+            }
+            byte[] out = new byte[length - 3];
+            for (int i = 0; i < out.length; i++) {
+                out[i] = (byte) (data[offset + 3 + i] ^ 0x5A);
+            }
+            return out;
+        }
+    }
+
+    @Test
+    public void encryptedFrameHasTheFlagAndTheEncryptedSize() throws Exception {
+        byte[] frame = AaFrameCodec.encode(AaChannel.VIDEO, false, 0x8004, new byte[]{0x08, 0x01},
+                new FakeCipher());
+        // channel 3, flags BULK|ENCRYPTED = 0x0B, size = (2 id + 2 payload) + 3 overhead = 7
+        assertEquals(0x03, frame[0]);
+        assertEquals(0x0B, frame[1]);
+        assertEquals(7, ((frame[2] & 0xFF) << 8) | (frame[3] & 0xFF));
+        assertEquals(4 + 7, frame.length);
+    }
+
+    @Test
+    public void splitEncryptedMessageEncryptsEachFrameAndTotalsThePlaintext() throws Exception {
+        byte[] payload = new byte[40000];
+        for (int i = 0; i < payload.length; i++) {
+            payload[i] = (byte) (i * 3);
+        }
+        byte[] wire = AaFrameCodec.encode(AaChannel.VIDEO, false, 0x0001, payload, new FakeCipher());
+
+        // FIRST frame: flags FIRST|ENCRYPTED = 0x09, size = 0x4000 + 3, total = 40000 + 2 (plaintext)
+        assertEquals(0x09, wire[1]);
+        assertEquals(0x4000 + 3, ((wire[2] & 0xFF) << 8) | (wire[3] & 0xFF));
+        long total = ((wire[4] & 0xFFL) << 24) | ((wire[5] & 0xFFL) << 16)
+                | ((wire[6] & 0xFFL) << 8) | (wire[7] & 0xFFL);
+        assertEquals(40002L, total);
+
+        AaFrameCodec.Parser parser = new AaFrameCodec.Parser();
+        parser.setCipher(new FakeCipher());
+        List<AaFrame> frames = new java.util.ArrayList<AaFrame>();
+        parser.feed(wire, 0, wire.length, frames);
+        assertEquals(1, frames.size());
+        assertTrue(frames.get(0).encrypted);
+        assertArrayEquals(payload, frames.get(0).payload);
+    }
+
+    @Test
+    public void encryptedFrameWithoutACipherIsAProtocolError() throws Exception {
+        byte[] wire = AaFrameCodec.encode(AaChannel.CONTROL, false, 0x000B, new byte[0],
+                new FakeCipher());
+        try {
+            new AaFrameCodec.Parser().feed(wire, 0, wire.length, new java.util.ArrayList<AaFrame>());
+            org.junit.Assert.fail("expected AaProtocolException");
+        } catch (AaProtocolException expected) {
+            assertTrue(expected.getMessage().contains("TLS"));
+        }
+    }
+
+    @Test
+    public void theCipherCanBeInstalledBetweenTwoMessagesOfOneRead() throws Exception {
+        // One TCP read holds the last (plain) handshake message AND the first encrypted frame.
+        // The first message's handler switches encryption on; the second frame must then decrypt.
+        byte[] plain = AaFrameCodec.encode(AaChannel.CONTROL, false, AaMessageType.SSL_HANDSHAKE,
+                new byte[]{1, 2, 3});
+        byte[] secret = AaFrameCodec.encode(AaChannel.CONTROL, false, AaMessageType.PING_REQUEST,
+                new byte[]{9, 9}, new FakeCipher());
+        byte[] both = new byte[plain.length + secret.length];
+        System.arraycopy(plain, 0, both, 0, plain.length);
+        System.arraycopy(secret, 0, both, plain.length, secret.length);
+
+        final AaFrameCodec.Parser parser = new AaFrameCodec.Parser();
+        final List<AaFrame> seen = new java.util.ArrayList<AaFrame>();
+        parser.feed(both, 0, both.length, new AaFrameCodec.Listener() {
+            @Override
+            public void onMessage(AaFrame frame) {
+                seen.add(frame);
+                if (frame.messageId == AaMessageType.SSL_HANDSHAKE) {
+                    parser.setCipher(new FakeCipher());
+                }
+            }
+        });
+        assertEquals(2, seen.size());
+        assertTrue(!seen.get(0).encrypted);
+        assertTrue(seen.get(1).encrypted);
+        assertArrayEquals(new byte[]{9, 9}, seen.get(1).payload);
     }
 }

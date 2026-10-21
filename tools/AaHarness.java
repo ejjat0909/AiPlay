@@ -1,4 +1,5 @@
 import com.ejjat.aiplay.core.aa.AaControl;
+import com.ejjat.aiplay.core.aa.AaCryptor;
 import com.ejjat.aiplay.core.aa.AaSession;
 
 import java.io.FileInputStream;
@@ -6,16 +7,16 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.security.KeyStore;
 
-import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
+
 
 /**
- * Desktop harness: runs the same AaSession the Android service uses, over TLS, so the receiver can
- * be exercised (and tools/aa-probe.py validated) without a phone.
+ * Desktop harness: runs the same AaSession the Android service uses — plain TCP with TLS carried
+ * in-band, head unit as the TLS client — so the receiver can be exercised (and tools/aa-probe.py
+ * validated) without a phone.
  *
  * <pre>
  *   ./tools/test.sh                                  # builds core + a test keystore
@@ -34,6 +35,7 @@ public final class AaHarness {
         String keystore = args.length > 1 ? args[1] : "build/test/keystore.p12";
         final String dump = args.length > 2 ? args[2] : null;
 
+        // The head unit's client identity: any PKCS12 with an RSA key, password "aiplay".
         KeyStore store = KeyStore.getInstance("PKCS12");
         InputStream input = new FileInputStream(keystore);
         try {
@@ -41,24 +43,19 @@ public final class AaHarness {
         } finally {
             input.close();
         }
-        KeyManagerFactory factory =
-                KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        factory.init(store, "aiplay".toCharArray());
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(factory.getKeyManagers(), null, null);
+        final SSLContext context = AaCryptor.clientContext(store, "aiplay".toCharArray());
 
-        final SSLServerSocket server =
-                (SSLServerSocket) context.getServerSocketFactory().createServerSocket(port);
+        final ServerSocket server = new ServerSocket(port);
         server.setReuseAddress(true);
-        System.out.println("AiPlay harness listening on tcp " + port + " (TLS)");
+        System.out.println("AiPlay harness listening on tcp " + port + " (plain AA, TLS in-band)");
         System.out.println("probe it with: python3 tools/aa-probe.py 127.0.0.1 --port " + port);
 
         while (true) {
-            final SSLSocket socket = (SSLSocket) server.accept();
+            final Socket socket = server.accept();
             Thread worker = new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    serve(socket, dump);
+                    serve(socket, dump, context);
                 }
             }, "harness-session");
             worker.setDaemon(true);
@@ -66,12 +63,10 @@ public final class AaHarness {
         }
     }
 
-    private static void serve(SSLSocket socket, String dump) {
+    private static void serve(Socket socket, String dump, SSLContext context) {
         try {
             socket.setSoTimeout(30000);
-            socket.startHandshake();
-            System.out.println("--- session from " + socket.getInetAddress().getHostAddress()
-                    + " cipher=" + socket.getSession().getCipherSuite());
+            System.out.println("--- session from " + socket.getInetAddress().getHostAddress());
 
             AaControl.ServiceDiscoveryConfig config = new AaControl.ServiceDiscoveryConfig();
             config.headUnitName = "AiPlay harness";
@@ -85,7 +80,7 @@ public final class AaHarness {
                 public void onEvent(String message) {
                     System.out.println("    " + message);
                 }
-            }, config);
+            }, config, new AaCryptor(context));
             final FileOutputStream video = dump == null ? null : new FileOutputStream(dump);
             session.setVideoSink(new AaSession.VideoSink() {
                 @Override

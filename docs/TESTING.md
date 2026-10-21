@@ -107,10 +107,12 @@ adb shell wm size reset && adb shell wm density reset
 
 | Class | Tests | What would break without it |
 | --- | --- | --- |
-| `aa.AaFrameCodecTest` | 10 | Frame header endianness, byte-at-a-time TCP fragmentation, trailing partial frame, 64 KiB payload cap, out-of-bounds feed, unknown-id naming |
+| `aa.AaFrameCodecTest` | 20 | Frame header endianness, flags (channel 0 is SPECIFIC, channel open is CONTROL), byte-at-a-time fragmentation, 64 KiB cap, **per-frame encryption with plaintext `total`**, cipher installed mid-read, encrypted frame without TLS |
 | `aa.ProtoTest` | 6 | Varint encoding vs protobuf reference vectors, nested messages, truncated varints, overlong length-delimited fields, fixed-width skip |
-| `aa.AaControlTest` | 10 | Exact wire bytes for version/auth/channel-open, service-discovery channel descriptors (video 720p30, audio 48k/16/2, touch 1280×720), tolerant parsing of garbage |
-| `aa.AaSessionTest` | 16 | Handshake ordering, idempotent `begin()`, channel open on its own channel / refusal of unserved channels, video setup/focus/start/stop, per-frame acks, split-framed 50 kB picture, ping, unknown-frame reporting, peer close, **real TLS loopback exchange** |
+| `aa.AaControlTest` | 12 | Exact wire bytes (raw version 1.1, auth, channel open), discovery descriptors, version mismatch / missing status |
+| `aa.AaSessionTest` | 14 | Channel logic in plaintext mode: ordering, channel open on its own channel, refusal of unserved channels, video setup/focus/start/stop, per-frame acks, split-framed 50 kB picture |
+| `aa.AaCryptorTest` | 6 | In-band TLS 1.2 against a server-mode engine that requires a client certificate and advertises a non-matching issuer; 7-byte flight fragments; garbage rejected |
+| `aa.AaTransportTest` | 3 | Real TCP loopback: raw version, in-band handshake, auth in the clear, encrypted video session, every message's flags/encryption, version mismatch, early encrypted frame |
 | `ReceiverIdentityTest` | 2 | The committed TLS identity loads and is not PBES2 (older Android cannot read it) |
 | `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |

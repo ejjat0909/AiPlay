@@ -14,7 +14,8 @@ public class AaControlTest {
 
     @Test
     public void versionRequestMatchesWireVector() {
-        assertArrayEquals(new byte[]{0x08, 0x01, 0x10, 0x06}, AaControl.versionRequest());
+        // raw big-endian u16s, NOT protobuf: [major=1][minor=1]
+        assertArrayEquals(new byte[]{0x00, 0x01, 0x00, 0x01}, AaControl.versionRequest());
     }
 
     @Test
@@ -241,17 +242,37 @@ public class AaControlTest {
     @Test
     public void parsesVersionResponse() {
         AaControl.VersionResponse response =
-                AaControl.parseVersionResponse(new byte[]{0x08, 0x01, 0x10, 0x06, 0x18, 0x00});
+                AaControl.parseVersionResponse(new byte[]{0x00, 0x01, 0x00, 0x07, 0x00, 0x00});
         assertTrue(response.complete);
+        assertTrue(response.matches());
         assertEquals(1, response.major);
-        assertEquals(6, response.minor);
+        assertEquals(7, response.minor);
         assertEquals(0, response.status);
     }
 
     @Test
-    public void toleratesGarbageVersionResponse() {
-        AaControl.VersionResponse response = AaControl.parseVersionResponse(new byte[]{(byte) 0x80});
+    public void versionMismatchIsRecognised() {
+        AaControl.VersionResponse response = AaControl.parseVersionResponse(
+                AaControl.versionResponse(1, 1, AaControl.VERSION_MISMATCH));
+        assertFalse(response.matches());
+        assertTrue(response.toString().contains("MISMATCH"));
+    }
+
+    @Test
+    public void aVersionResponseWithoutStatusCountsAsMismatch() {
+        // aasdk: a missing status defaults to MISMATCH
+        AaControl.VersionResponse response =
+                AaControl.parseVersionResponse(new byte[]{0x00, 0x01, 0x00, 0x01});
         assertFalse(response.complete);
+        assertFalse(response.matches());
+        assertFalse(AaControl.parseVersionResponse(new byte[]{(byte) 0x80}).matches());
+    }
+
+    @Test
+    public void versionIsAasdksOneDotOne() {
+        // include/f1x/aasdk/Version.hpp: AASDK_MAJOR = 1, AASDK_MINOR = 1
+        assertEquals(1, AaControl.PROTOCOL_MAJOR);
+        assertEquals(1, AaControl.PROTOCOL_MINOR);
     }
 
     @Test

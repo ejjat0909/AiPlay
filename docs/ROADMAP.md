@@ -16,7 +16,8 @@ Acceptance: a real phone completes discovery **and** renders its UI on the head 
 
 - [x] Video channel on the wire: open, setup, focus, start/stop, media + acks (0.2.0-alpha1, loopback-verified)
 - [x] H.264 → `MediaCodec` → `SurfaceView` (`ProjectionActivity`) — compiles; **not yet run on a device**
-- [ ] **Transport rework (blocks every real phone):** plain TCP, in-band TLS as the *client* via `SSL_HANDSHAKE`, encrypted frames. See PROTOCOL.md 2.2
+- [x] Transport rework: plain TCP, in-band TLS as the *client* via `SSL_HANDSHAKE`, per-frame encryption, raw version messages, flag semantics (0.2.0-alpha4, PROTOCOL.md 2.2–2.3) — verified on a JVM, against OpenSSL, and on an emulator; **not against a real phone**
+- [ ] **Open question: does a phone accept a self-signed head-unit certificate?** (PROTOCOL.md 2.4) — can only be answered with a phone
 - [ ] **Bluetooth bootstrap for wireless AA** (phone is told the head unit's address over Bluetooth, then connects over Wi-Fi) — needed for the phone to find AiPlay at all
 - [ ] Media audio: `AudioTrack` 48 kHz stereo with ack cadence
 - [ ] Speech audio with media ducking

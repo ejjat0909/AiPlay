@@ -6,10 +6,17 @@ left to 0.2.0. Anything not listed here is **not** implemented.
 ## 1. Layering
 
 ```
-TCP :5277  →  TLS 1.2/1.3  →  AA frame  →  protobuf control message   (AiPlay today; see 2.2: a real phone uses plain TCP with TLS inside the frames)
+TCP  →  AA frame (plain)  ──────────────┬─ VERSION_REQUEST / RESPONSE      (raw, in the clear)
+                                        ├─ SSL_HANDSHAKE ×n                 (TLS 1.2 records, in the clear)
+                                        ├─ AUTH_COMPLETE                    (protobuf, in the clear)
+                                        └─ everything else: each frame payload is one TLS record
 ```
 
-Discovery is mDNS (`_androidauto._tcp`). USB accessory mode (AOA) is a 0.3.0 transport.
+The socket carries plain AA frames. TLS is not on the socket: the head unit is the TLS **client**
+and runs the handshake inside `SSL_HANDSHAKE` messages; afterwards every frame (except those three
+message types) has the `ENCRYPTED` flag and an encrypted payload. Wireless Android Auto reaches the
+head unit's TCP port because a Bluetooth exchange told the phone its address and port (not yet
+implemented, see ROADMAP); USB accessory mode (AOA) is a 0.3.0 transport.
 
 ## 2. Frame format (verified)
 
@@ -55,25 +62,61 @@ message id inside the protobuf. Every "handshake complete" before 0.1.3 was AiPl
 AiPlay. The 0.1.3 codec follows the aasdk format above, and the probe was rewritten to match,
 so the loopback test now exercises the real contract.
 
-### 2.2 Correction: the transport is not TLS-on-TCP (found while building 0.2.0)
+### 2.2 Correction: the transport was not TLS-on-TCP (fixed in 0.2.0-alpha4)
 
-Checking the video messages against aasdk's sources also showed how the TLS layer really works,
-and AiPlay's does not match it. In aasdk (`Messenger/Cryptor.cpp`, `Transport/SSLWrapper.cpp`):
+0.1.x–0.2.0-alpha3 ran a TLS *server* directly on the TCP socket. That was self-consistent with
+`tools/aa-probe.py` and the JVM tests (the same trap as 0.1.0–0.1.2's framing) but a real phone
+would have sent plain AA bytes into a TLS server. aasdk
+(`Messenger/Cryptor.cpp`, `Transport/SSLWrapper.cpp`, `Messenger/MessageOutStream.cpp`,
+`MessageInStream.cpp`) and OpenAuto's `AndroidAutoEntity.cpp` (which drives it) do this instead:
 
-* the TCP connection carries **plain AA frames**; there is no TLS on the socket;
-* TLS 1.2 runs **inside the protocol**, over memory BIOs: handshake records travel in
-  `SSL_HANDSHAKE` (`0x0003`) control messages, and once it completes, later frames are sent with
-  the `ENCRYPTED` flag and a TLS-protected payload;
-* the **head unit is the TLS client** (`SSL_set_connect_state`, `TLS_client_method`) and the
-  phone is the TLS server.
+1. the head unit sends `VERSION_REQUEST`; the phone answers `VERSION_RESPONSE`;
+2. the head unit — the TLS **client**, `TLSv1_2_client_method`, `SSL_set_connect_state` — runs
+   `SSL_do_handshake` over memory BIOs and sends the bytes it produced in an `SSL_HANDSHAKE`
+   message; the phone's bytes come back the same way, until the handshake is done;
+3. the head unit sends `AUTH_COMPLETE` (still in the clear);
+4. from then on every frame carries `ENCRYPTED`. **Each frame's payload chunk is its own TLS
+   record**; the frame size on the wire is the *encrypted* size, while the `total` in a FIRST frame
+   is the *plaintext* size of the whole message.
 
-AiPlay 0.1.x–0.2.0-alpha1 instead runs a TLS *server* directly on tcp 5277. That is self-consistent
-with `tools/aa-probe.py` and the JVM tests (the same trap as 0.1.0–0.1.2's framing), but **a real
-phone would send plain AA bytes into a TLS server and the handshake would fail**. The video channel
-below is independent of the transport and is verified; the transport is not. Replacing it
-(in-band TLS with a `SSLEngine` in client mode, plain TCP, encrypted frames) is the next milestone,
-and the wireless path also needs a Bluetooth bootstrap before the phone knows where to connect
-(see ROADMAP).
+Implemented in `core/aa/AaCryptor.java` (an `SSLEngine` in client mode; "bytes in, bytes out" for the
+handshake, `encrypt`/`decrypt` for frames), `AaFrameCodec` (per-frame cipher; the parser hands each
+message to a listener as soon as it completes, because the handler of the last `SSL_HANDSHAKE`
+switches decryption on and the next frame in the same read may already be encrypted) and
+`AaSession` (the state machine). The listener is now a plain `ServerSocket` (`receiver/AaServer`).
+
+### 2.3 Two more corrections found in the same pass (also fixed in 0.2.0-alpha4)
+
+* **`VERSION_REQUEST`/`VERSION_RESPONSE` are not protobuf.** aasdk writes two (three, for the
+  response) big-endian 16-bit numbers: `00 01 00 01` for 1.1; `[major][minor][status]` back, with
+  status `MATCH = 0`, `MISMATCH = 0xFFFF`, and a missing status counted as a mismatch. AiPlay sent a
+  protobuf (`08 01 10 06`) — also four bytes long, which is why it looked fine — and the version was
+  1.6 with no source; aasdk announces **1.1** (`include/f1x/aasdk/Version.hpp`).
+* **The `CONTROL` flag is not "this is a control-channel message".** In aasdk it is
+  `MessageType::CONTROL` and is set only on channel-level control messages on a *non-zero* channel
+  (channel open request/response). Everything on channel 0 — version, handshake, auth, service
+  discovery, ping, shutdown — is `SPECIFIC`, flag clear: a version request is `00 03 00 06 …`, not
+  `00 07 …`. A real phone's channel-0 messages would not have matched AiPlay's `control` branch.
+  Dispatch is now by channel and message id.
+
+### 2.4 Head-unit identity (and what is *not* verified)
+
+In aasdk the head unit presents a certificate and private key as TLS client certificate, and does
+not verify the phone's. The certificate it embeds is a real credential: issued by *Google Automotive
+Link* to *JVC Kenwood*, with its private key published in the repository. **AiPlay does not use
+it**: borrowing another vendor's licensed head-unit identity is an impersonation workaround, which
+the project rules out. AiPlay presents its own self-signed certificate
+(`res/raw/receiver_identity.p12`) and, like aasdk, accepts the phone's certificate without checking
+it (`AaCryptor.TrustPhone`: the phone's certificate chains to nothing a head unit could validate;
+what gates a session is the Bluetooth pairing and Wi-Fi credentials, not this handshake).
+
+**Unverified: whether a real phone accepts a head unit with a self-signed certificate.** Every
+test uses a server that accepts any client certificate that is *present*; the JVM tests also make
+the fake phone advertise an issuer list that excludes AiPlay's certificate, as a real phone's
+`CertificateRequest` does, which is why the head unit's key manager (`AaCryptor.AlwaysPresent`)
+sends its certificate regardless of that list. If phones turn out to require a Google-issued
+chain, AiPlay cannot work as a head unit without a credential it is not entitled to; that would
+need a decision, not a workaround.
 
 ## 3. Message identifiers (verified)
 
@@ -81,13 +124,13 @@ Control-channel ids, from `aasdk_proto/ControlMessageIdsEnum.proto` (f1xpl/aasdk
 
 | Id | Name | behaviour |
 | --- | --- | --- |
-| `0x0001` | `VERSION_REQUEST` | **sent** on session start |
-| `0x0002` | `VERSION_RESPONSE` | parsed → `AUTH_COMPLETE` |
-| `0x0003` | `SSL_HANDSHAKE` | not used (TLS is the handshake) |
-| `0x0004` | `AUTH_COMPLETE` | **sent** with `status = OK` |
+| `0x0001` | `VERSION_REQUEST` | **sent** on session start, raw `[major u16][minor u16]` = 1.1, in the clear |
+| `0x0002` | `VERSION_RESPONSE` | raw `[major][minor][status]`; mismatch ends the session; match starts TLS |
+| `0x0003` | `SSL_HANDSHAKE` | **sent and parsed**: raw TLS 1.2 handshake bytes, head unit is the client, in the clear |
+| `0x0004` | `AUTH_COMPLETE` | **sent** with `status = OK` once TLS is up; still in the clear |
 | `0x0005` | `SERVICE_DISCOVERY_REQUEST` | parsed, logged |
 | `0x0006` | `SERVICE_DISCOVERY_RESPONSE` | **sent** with channel descriptors |
-| `0x0007` | `CHANNEL_OPEN_REQUEST` | sent by the phone **on the channel it wants**; answered on that channel: `OK` for video, `FAIL` otherwise |
+| `0x0007` | `CHANNEL_OPEN_REQUEST` | sent by the phone **on the channel it wants**; answered on that channel, `CONTROL`-typed: `OK` for video, `FAIL` otherwise |
 | `0x0008` | `CHANNEL_OPEN_RESPONSE` | **sent** |
 | `0x000b`/`0x000c` | `PING_REQUEST` / `PING_RESPONSE` | answered |
 | `0x000f`/`0x0010` | `SHUTDOWN_REQUEST` / `RESPONSE` | acknowledged |
@@ -105,8 +148,7 @@ with `AV_MEDIA_WITH_TIMESTAMP_INDICATION = 0x0000` / `AV_MEDIA_INDICATION = 0x00
 From the aasdk protobuf definitions:
 
 ```proto
-message VersionRequest  { int32 major = 1; int32 minor = 2; }              // sent as 1.6
-message VersionResponse { int32 major = 1; int32 minor = 2; int32 status = 3; }
+// VersionRequest / VersionResponse are NOT protobuf: raw big-endian u16s, see 2.3.
 message AuthCompleteIndication { required Status.Enum status = 1; }        // OK = 0
 message ServiceDiscoveryRequest { string device_name = 4; string device_brand = 5; }
 message ServiceDiscoveryResponse {
@@ -158,43 +200,57 @@ message VideoFocusIndication { VideoFocusMode.Enum focus_mode = 1; bool unreques
 Media: `MEDIA_WITH_TIMESTAMP` (`0x0000`) is `[timestamp u64 BE µs][Annex-B H.264]`; `MEDIA`
 (`0x0001`) is the H.264 alone. Both travel on the video channel with the control flag clear.
 
-## 5. Session as implemented (0.2.0-alpha1)
+## 5. Session as implemented (0.2.0-alpha4)
 
 ```
-head unit                                phone
-   │──── VERSION_REQUEST (1.6) ───────────────▶│   (inside AiPlay's TLS-on-TCP, see 2.2)
-   │◀──────────── VERSION_RESPONSE ────────────│
-   │──── AUTH_COMPLETE (OK) ──────────────────▶│
-   │◀──────── SERVICE_DISCOVERY_REQUEST ───────│
-   │──── SERVICE_DISCOVERY_RESPONSE (video) ──▶│
-   │◀──── CHANNEL_OPEN_REQUEST   [video ch] ────│
-   │──── CHANNEL_OPEN_RESPONSE (OK) [video ch] ▶│
-   │◀──── SETUP_REQUEST (config 0) ─────────────│
-   │──── SETUP_RESPONSE (OK, max_unacked 1, [0]) ▶│
-   │◀──── VIDEO_FOCUS_REQUEST (FOCUSED) ────────│
-   │──── VIDEO_FOCUS_INDICATION (FOCUSED) ─────▶│
-   │◀──── START_INDICATION (session, config) ───│
-   │◀──── MEDIA_WITH_TIMESTAMP … ───────────────│   H.264, one picture per message
-   │──── MEDIA_ACK (session, 1) ────────────────▶│   one ack per picture
-   │◀──── STOP_INDICATION ───────────────────────│
+head unit (TLS client)                           phone (TLS server)
+   │──── VERSION_REQUEST 1.1  [raw, plain] ──────────▶│
+   │◀──── VERSION_RESPONSE [raw, plain] ───────────────│
+   │──── SSL_HANDSHAKE (ClientHello) [plain] ─────────▶│
+   │◀──── SSL_HANDSHAKE (ServerHello … Done) ──────────│     TLS 1.2, in the clear, inside AA frames
+   │──── SSL_HANDSHAKE (Certificate … Finished) ──────▶│
+   │◀──── SSL_HANDSHAKE (ChangeCipherSpec, Finished) ──│
+   │──── AUTH_COMPLETE (OK) [plain] ──────────────────▶│
+   │         ════════ every frame below is ENCRYPTED ════════
+   │◀──── SERVICE_DISCOVERY_REQUEST ───────────────────│
+   │──── SERVICE_DISCOVERY_RESPONSE (video) ──────────▶│
+   │◀──── CHANNEL_OPEN_REQUEST   [video ch, CONTROL] ───│
+   │──── CHANNEL_OPEN_RESPONSE (OK) [video ch, CONTROL] ▶│
+   │◀──── SETUP_REQUEST (config 0) ─────────────────────│
+   │──── SETUP_RESPONSE (OK, max_unacked 1, [0]) ─────▶│
+   │◀──── VIDEO_FOCUS_REQUEST (FOCUSED) ────────────────│
+   │──── VIDEO_FOCUS_INDICATION (FOCUSED) ─────────────▶│
+   │◀──── START_INDICATION (session, config) ───────────│
+   │◀──── MEDIA_WITH_TIMESTAMP … ───────────────────────│   H.264, one picture per message
+   │──── MEDIA_ACK (session, 1) ────────────────────────▶│   one ack per picture
+   │◀──── STOP_INDICATION ──────────────────────────────│
 ```
 
-Verified by `AaSessionTest` (each step, including split framing of a 50 kB picture),
-`AaAvTest` (hand-computed wire vectors), and `tools/aa-probe.py` against `tools/AaHarness.java`:
-90 pictures sent, 90 acked, received stream **byte-identical** to the clip and decodable.
-Decoding to a screen is `receiver/VideoDecoder.java` (`MediaCodec` → `SurfaceView`), exercised only
-by `tools/device-test.sh` on a device.
+Verified by:
+
+* `AaTransportTest` — a real TCP loopback against a fake phone with a **server-mode `SSLEngine` that
+  requires a client certificate**: the exact order above, every message's flags and encryption
+  checked, a 60 kB picture split into several encrypted frames, version mismatch, and an encrypted
+  frame before TLS being rejected;
+* `AaCryptorTest` (TLS 1.2, client certificate sent despite a non-matching issuer list, handshake
+  flights delivered 7 bytes at a time, garbage records rejected), `AaFrameCodecTest` (per-frame
+  encryption, plaintext `total`, cipher installed between two messages of one read);
+* `tools/aa-probe.py` against `tools/AaHarness.java`: the probe's TLS server is **OpenSSL**
+  (`ssl.MemoryBIO`), the head unit's client is JSSE/Conscrypt, so the in-band TLS is checked
+  across two independent implementations; 90 pictures acked, stream byte-identical to the clip;
+* `tools/device-test.sh` on an Android emulator: same flow against the real APK.
+
+The mutation checks that guard this are in the 0.2.0-alpha4 changelog entry.
 
 ## 6. Not implemented
 
 | Channel | Needs |
 | --- | --- |
-| Transport | in-band TLS (`SSL_HANDSHAKE`, head unit = TLS client), plain TCP, encrypted frames; Bluetooth bootstrap for wireless |
+| Bluetooth bootstrap | wireless AA: the phone learns the head unit's Wi-Fi address and port over Bluetooth (RFCOMM). Without it a phone never connects to AiPlay's port. Unverified in detail |
 | Media audio | `AVChannelSetup` + `AudioTrack` 48 kHz stereo, ack cadence |
 | Speech audio | second `AudioTrack`, ducking |
 | Input | `TouchEventData` (absolute, normalised) → `MotionEvent`, `ButtonEventsData` |
 | Sensor | `SensorChannel` start request, day/night + driving status |
-| Bluetooth | pairing helper only |
 
 ## 7. Honesty boundary
 

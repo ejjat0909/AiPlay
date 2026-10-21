@@ -2,6 +2,62 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha4] — 2026-10-21
+
+The transport rework. Reading aasdk's sources for it showed that AiPlay's wire format was still wrong
+in **four** places, three of them in what 0.1.3 had called "the real framing". None of them could be
+seen by AiPlay's own tests or probe, because both agreed with AiPlay. Details: `docs/PROTOCOL.md` 2.2–2.4.
+
+### Fixed (each would have stopped a real phone)
+
+* **TLS was on the socket; real Android Auto carries it inside the protocol.** The receiver is now a
+  plain TCP listener (`AaServer`, replacing `AaTlsServer`). The head unit is the TLS *client*: after the
+  version exchange it runs TLS 1.2 in `SSL_HANDSHAKE` messages (`AaCryptor`, an `SSLEngine`), sends
+  `AUTH_COMPLETE` in the clear, and from then on every frame is encrypted — each frame's payload chunk
+  as its own TLS record, with the FIRST frame's `total` counting plaintext.
+* **`VERSION_REQUEST`/`VERSION_RESPONSE` are raw big-endian u16s, not protobuf** (`00 01 00 01`, not
+  `08 01 10 06`), and the announced version is aasdk's 1.1, not an unsourced 1.6.
+* **Channel-0 messages carried the `CONTROL` flag; aasdk sends them without it.** The flag is only for
+  channel open/close on non-zero channels. Dispatch is now by channel and message id.
+* **A channel open on the control channel is no longer accepted** (a real phone sends it on the channel
+  it wants).
+
+### Added
+
+* `AaCryptor`, `AaFrameCodec.Cipher`/`Listener`, `AaFrame.encrypted`; the parser delivers each message
+  as it completes so the cipher can be switched on between two messages of one read.
+* `tools/aa-probe.py` rewritten as a faithful phone: plain TCP, in-band TLS **server** (OpenSSL via
+  `ssl.MemoryBIO`), per-frame encrypted records, and `WIRE MISMATCH` checks on the flags, version
+  encoding and which messages are encrypted. `tools/AaHarness.java` follows. `tools/fixtures/
+  probe-phone.pem` is a throwaway test certificate for the probe's TLS server.
+* 14 new tests (101 total): `AaTransportTest`, `AaCryptorTest`, encrypted-codec tests.
+
+### Not done / unverified
+
+* **A real phone has never connected.** Whether it accepts a self-signed head-unit certificate is
+  unknown (PROTOCOL.md 2.4). AiPlay deliberately does **not** use the certificate embedded in aasdk: it
+  was issued to JVC Kenwood by Google Automotive Link and its private key is public, which makes it
+  someone else's head-unit identity.
+* The phone still has no way to find AiPlay: wireless Android Auto uses a Bluetooth exchange to hand the
+  phone the head unit's Wi-Fi address and port. That is the next milestone.
+
+### Verified
+
+* JVM: 101 tests. **Mutation checks** (each change made, the suite run, the change reverted): stock key
+  manager instead of `AlwaysPresent` — 6 tests fail; `CONTROL` flag back on channel 0 — fails; encryption
+  switched on before auth-complete — fails; parser never given the cipher — fails. The first version of
+  the client-certificate test did *not* fail under the stock key manager, because the fake phone advertised
+  no issuers; it now advertises one that excludes AiPlay's certificate, like a real phone.
+* Cross-implementation: probe (OpenSSL TLS server) against the harness (JSSE client): 90/90 pictures
+  acked, stream byte-identical to the clip.
+* Emulator (API 34, XL VM, no swap): `device-test.sh` 10/10 exit 0, every screenshot shows the test
+  pattern, `TLS up: TLSv1.2 TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384` on Android's own TLS stack.
+
+### Changed
+
+* `device-test.sh` waits for the receiver by reading the head unit's first two bytes (`00 03`, the
+  version request) instead of doing a TLS handshake on the socket.
+
 ## [0.2.0-alpha3] - 2026-10-21
 
 Found by the user on an API 34 emulator (`c2.goldfish.h264.decoder`): the decoder started, took 15 of

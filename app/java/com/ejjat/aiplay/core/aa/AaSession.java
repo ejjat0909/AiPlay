@@ -12,10 +12,19 @@ import java.util.List;
  * <p>Pure Java on purpose: the listener in the Android layer only accepts sockets and hands the
  * streams here, which means the whole exchange can be exercised by a desktop JVM test.</p>
  *
- * <p>Implemented: version negotiation, auth complete, service discovery, ping, shutdown, and (0.2.0)
- * the video channel: channel open, AV setup, start/stop, video focus, and media acks. Audio, input
- * and sensor channels are not implemented; they are not advertised in service discovery and an
- * attempt to open one is answered with FAIL and logged, never silently dropped.</p>
+ * <p>Order on the wire (aasdk + OpenAuto, head-unit role): the head unit sends the version request;
+ * the phone answers; the head unit — the TLS <em>client</em> — then runs a TLS 1.2 handshake carried
+ * in {@code SSL_HANDSHAKE} messages and sends auth-complete; from then on every frame is encrypted
+ * except those three message types. See {@link AaCryptor}.</p>
+ *
+ * <p>Without a cryptor the session runs in plaintext mode (auth-complete follows the version
+ * response directly). That exists so channel logic can be unit-tested without TLS; the receiver
+ * always passes a cryptor.</p>
+ *
+ * <p>Implemented: version negotiation, TLS, auth complete, service discovery, ping, shutdown, and
+ * the video channel: channel open, AV setup, start/stop, video focus, media acks. Audio, input and
+ * sensor channels are not implemented; they are not advertised and an attempt to open one is
+ * answered with FAIL and logged, never silently dropped.</p>
  *
  * <p>Wire format: see {@link AaFrameCodec}. Every message carries a channel id and a flags byte
  * before its size; the message id is the first two bytes of the message payload.</p>
@@ -64,20 +73,35 @@ public final class AaSession {
     private final List<AaFrame> pending = new ArrayList<AaFrame>();
     private final AaControl.ServiceDiscoveryConfig discovery;
 
+    private final AaCryptor cryptor;
+
     private VideoSink videoSink;
     private boolean versionSent;
+    private boolean encrypting;
     private boolean videoOpen;
     private boolean videoStarted;
     private int videoSession;
     private long videoFrames;
     private long videoBytes;
 
+    /** Plaintext session (tests): no TLS handshake. */
     public AaSession(InputStream input, OutputStream output, Sink sink,
                      AaControl.ServiceDiscoveryConfig discovery) {
+        this(input, output, sink, discovery, null);
+    }
+
+    public AaSession(InputStream input, OutputStream output, Sink sink,
+                     AaControl.ServiceDiscoveryConfig discovery, AaCryptor cryptor) {
         this.input = input;
         this.output = output;
         this.sink = sink;
         this.discovery = discovery;
+        this.cryptor = cryptor;
+    }
+
+    /** True once the TLS handshake finished and outgoing frames are being encrypted. */
+    public boolean isEncrypted() {
+        return encrypting;
     }
 
     public void setVideoSink(VideoSink videoSink) {
@@ -113,18 +137,25 @@ public final class AaSession {
             finishVideo();
             return -1;
         }
-        pending.clear();
-        parser.feed(buffer, 0, read, pending);
-        for (int i = 0; i < pending.size(); i++) {
-            handle(pending.get(i));
-        }
-        return pending.size();
+        final int[] handled = {0};
+        parser.feed(buffer, 0, read, new AaFrameCodec.Listener() {
+            @Override
+            public void onMessage(AaFrame frame) throws IOException, AaProtocolException {
+                handled[0]++;
+                handle(frame);
+            }
+        });
+        return handled[0];
     }
 
     /** Processes one message and writes any replies. Exposed for tests. */
-    public void handle(AaFrame frame) throws IOException {
-        if (!frame.control) {
-            if (frame.channel == AaChannel.VIDEO && videoOpen) {
+    public void handle(AaFrame frame) throws IOException, AaProtocolException {
+        if (frame.channel != AaChannel.CONTROL) {
+            // aasdk dispatches on the message id: channel open is a CONTROL-typed message on the
+            // channel itself, everything else is channel-specific.
+            if (frame.messageId == AaMessageType.CHANNEL_OPEN_REQUEST && frame.control) {
+                openChannel(frame);
+            } else if (frame.channel == AaChannel.VIDEO && videoOpen) {
                 handleVideo(frame);
             } else if (frame.channel == AaChannel.VIDEO) {
                 event("video message " + frame + " before the channel was opened — ignored");
@@ -137,20 +168,46 @@ public final class AaSession {
         switch (frame.messageId) {
             case AaMessageType.VERSION_RESPONSE: {
                 AaControl.VersionResponse response = AaControl.parseVersionResponse(frame.payload);
-                event("peer version " + response);
-                sendControl(AaMessageType.AUTH_COMPLETE, AaControl.authComplete(AaControl.STATUS_OK));
+                event("peer " + response);
+                if (!response.matches()) {
+                    throw new AaProtocolException("phone reports a protocol version mismatch");
+                }
+                if (cryptor == null) {
+                    sendControl(AaMessageType.AUTH_COMPLETE,
+                            AaControl.authComplete(AaControl.STATUS_OK));
+                } else {
+                    byte[] hello = cryptor.beginHandshake();
+                    event("starting TLS (head unit is the client)");
+                    sendControl(AaMessageType.SSL_HANDSHAKE, hello);
+                }
+                break;
+            }
+            case AaMessageType.SSL_HANDSHAKE: {
+                if (cryptor == null) {
+                    event("SSL_HANDSHAKE in plaintext mode — ignored");
+                    break;
+                }
+                byte[] reply = cryptor.handshake(frame.payload, 0, frame.payload.length);
+                if (reply.length > 0) {
+                    sendControl(AaMessageType.SSL_HANDSHAKE, reply);
+                }
+                if (cryptor.isHandshakeDone() && !encrypting) {
+                    parser.setCipher(cryptor);
+                    event("TLS up: " + cryptor.protocol() + " " + cryptor.cipherSuite());
+                    // auth-complete is still sent in the clear; everything after it is encrypted.
+                    sendControl(AaMessageType.AUTH_COMPLETE,
+                            AaControl.authComplete(AaControl.STATUS_OK));
+                    encrypting = true;
+                }
                 break;
             }
             case AaMessageType.SERVICE_DISCOVERY_REQUEST: {
                 AaControl.ServiceDiscoveryRequest request =
                         AaControl.parseServiceDiscoveryRequest(frame.payload);
-                event("service discovery from " + request.deviceBrand + " " + request.deviceName);
+                event("service discovery from " + request.deviceBrand + " " + request.deviceName
+                        + (frame.encrypted ? " (encrypted)" : ""));
                 sendControl(AaMessageType.SERVICE_DISCOVERY_RESPONSE,
                         AaControl.serviceDiscoveryResponse(discovery));
-                break;
-            }
-            case AaMessageType.CHANNEL_OPEN_REQUEST: {
-                openChannel(frame);
                 break;
             }
             case AaMessageType.PING_REQUEST: {
@@ -173,20 +230,18 @@ public final class AaSession {
     }
 
     /**
-     * A phone opens a channel by sending {@code ChannelOpenRequest} <em>on that channel</em>; the
-     * answer goes back on the same channel. A request on the control channel is accepted too, with
-     * the target taken from {@code channel_id}, because that is what 0.1.x probes sent.
+     * A phone opens a channel by sending {@code ChannelOpenRequest} <em>on that channel</em>
+     * (CONTROL-typed); the answer goes back on the same channel the same way.
      */
     private void openChannel(AaFrame frame) throws IOException {
-        int target = frame.channel != AaChannel.CONTROL
-                ? frame.channel : AaControl.parseChannelOpenRequest(frame.payload);
+        int target = frame.channel;
         boolean accept = target == AaChannel.VIDEO && discovery.advertiseVideo;
         event("channel open request for " + AaChannel.name(target)
                 + (accept ? " — accepted" : " — refused (not implemented)"));
         if (accept) {
             videoOpen = true;
         }
-        send(frame.channel, true, AaMessageType.CHANNEL_OPEN_RESPONSE,
+        send(target, true, AaMessageType.CHANNEL_OPEN_RESPONSE,
                 AaControl.channelOpenResponse(accept ? AaControl.STATUS_OK : AaControl.STATUS_FAIL));
     }
 
@@ -270,18 +325,28 @@ public final class AaSession {
         }
     }
 
+    /** A message on channel 0. aasdk sends these as SPECIFIC: the CONTROL flag stays clear. */
     private void sendControl(int messageId, byte[] payload) throws IOException {
-        send(AaChannel.CONTROL, true, messageId, payload);
+        send(AaChannel.CONTROL, false, messageId, payload);
     }
 
     /** Writes one message on the wire, splitting it into frames when it is large, and logs it. */
     public void send(int channel, boolean control, int messageId, byte[] payload) throws IOException {
         write(channel, control, messageId, payload);
+        boolean controlId = channel == AaChannel.CONTROL || control;
         event("sent " + AaChannel.name(channel) + "/"
-                + (control ? AaMessageType.name(messageId)
+                + (controlId ? AaMessageType.name(messageId)
                         : channel == AaChannel.VIDEO ? AaAv.name(messageId)
                         : String.format("0x%04X", messageId))
                 + " (" + payload.length + "B)");
+    }
+
+    /** True for the three messages aasdk sends in the clear even after TLS is up. */
+    private static boolean alwaysPlain(int channel, int messageId) {
+        return channel == AaChannel.CONTROL
+                && (messageId == AaMessageType.VERSION_REQUEST
+                || messageId == AaMessageType.SSL_HANDSHAKE
+                || messageId == AaMessageType.AUTH_COMPLETE);
     }
 
     private void write(int channel, boolean control, int messageId, byte[] payload)
@@ -289,7 +354,9 @@ public final class AaSession {
         if (payload.length + 2 > MAX_MESSAGE) {
             throw new IOException("message too large: " + payload.length);
         }
-        output.write(AaFrameCodec.encode(channel, control, messageId, payload));
+        boolean encrypt = encrypting && cryptor != null && !alwaysPlain(channel, messageId);
+        output.write(AaFrameCodec.encode(channel, control, messageId, payload,
+                encrypt ? cryptor : null));
         output.flush();
     }
 

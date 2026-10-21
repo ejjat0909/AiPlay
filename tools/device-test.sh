@@ -76,22 +76,23 @@ echo "laptop 127.0.0.1:$PORT -> device :$PORT"
 
 echo "== waiting for the receiver to listen =="
 # `adb forward` accepts the laptop-side connection even when nothing listens on the device, so a
-# bare TCP connect proves nothing (and shows up in the app log as a failed TLS session). Do a real
-# TLS handshake instead: it succeeds only when the receiver is up, and it ends cleanly.
+# bare TCP connect proves nothing. The head unit speaks first on a real session (VERSION_REQUEST,
+# channel 0, flags 0x03), so wait until the first two bytes arrive: that only happens when the
+# receiver is really up. (0.1.5 did a TLS handshake here; the socket no longer carries TLS.)
 if ! python3 - "$PORT" <<'PYWAIT'
-import socket, ssl, sys, time
+import socket, sys, time
 port = int(sys.argv[1])
-ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
 for _ in range(40):
     try:
         raw = socket.create_connection(("127.0.0.1", port), timeout=2)
-        with ctx.wrap_socket(raw) as tls:
-            tls.getpeercert()
-        sys.exit(0)
-    except (OSError, ssl.SSLError):
-        time.sleep(0.5)
+        raw.settimeout(2)
+        head = raw.recv(2)
+        raw.close()
+        if len(head) == 2 and head[0] == 0x00 and head[1] == 0x03:
+            sys.exit(0)
+    except OSError:
+        pass
+    time.sleep(0.5)
 sys.exit(1)
 PYWAIT
 then

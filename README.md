@@ -36,10 +36,10 @@ The condition model (P1–P5) is documented in [PLAN.md §2](PLAN.md) and
 | --- | --- |
 | Capability audit | **working**, unit-tested |
 | Enable / repair Android Auto | **working** where a root shell exists, ADB recipe otherwise |
-| Wireless receiver: discovery, TLS, AA control plane, **video channel** | **implemented and unit-tested** (loopback), not yet verified against a live phone. A real phone cannot connect yet: the transport differs from real Android Auto (see docs/PROTOCOL.md 2.2) |
+| Wireless receiver: plain TCP + in-band TLS, AA control plane, **video channel** | **implemented and tested** (JVM, OpenSSL peer, emulator), **not yet verified against a live phone** |
 | Receiver: video channel + H.264 decode to screen | **implemented** (0.2.0-alpha1); on-device rendering is checked by `tools/device-test.sh`, not yet run |
 | Receiver: audio / touch / sensor channels | **not implemented** — rest of milestone 0.2.0 |
-| Real phone over Wi-Fi | **not possible yet**: needs the transport rework and a Bluetooth bootstrap (docs/PROTOCOL.md 2.2) |
+| Real phone over Wi-Fi | **not possible yet**: the phone has to learn AiPlay's address and port over Bluetooth, which is not built; and it is unknown whether a phone accepts AiPlay's self-signed identity (docs/PROTOCOL.md 2.4) |
 
 The receiver is honest about this: it is experimental. It completes version negotiation and service
 discovery and can show a video stream, but it has no touch, audio or sensor channels, so it cannot
@@ -94,19 +94,27 @@ python3 tools/aa-probe.py <phone-ip>
 Expected output:
 
 ```
-connected  : tls TLSv1.3 / TLS_AES_256_GCM_SHA384
-<- VERSION_REQUEST            2 field(s), 4 byte(s)
--> VERSION_RESPONSE           version 1.6 status=0
-<- AUTH_COMPLETE              status=0
--> SERVICE_DISCOVERY_REQUEST  device='AiPlay probe'
-<- SERVICE_DISCOVERY_RESPONSE 4 channel(s), head unit='AiPlay', model='Android head unit'
--> PING_REQUEST               timestamp=1234567
-<- PING_RESPONSE              1 field(s), 6 byte(s)
-RESULT: handshake complete — receiver is speaking Android Auto
+connected  : plain tcp (TLS runs inside the protocol)
+<- control    VERSION_REQUEST            raw version 1.1
+-> control    VERSION_RESPONSE           6 byte(s)
+<- control    SSL_HANDSHAKE              265 byte(s) of TLS handshake
+-> control    SSL_HANDSHAKE              1266 byte(s)
+<- control    SSL_HANDSHAKE              93 byte(s) of TLS handshake
+-> control    SSL_HANDSHAKE              242 byte(s)
+<- control    AUTH_COMPLETE              status=0
+     tls up: TLSv1.2 / ECDHE-RSA-AES256-GCM-SHA384
+-> control    SERVICE_DISCOVERY_REQUEST  28 byte(s)  [encrypted]
+<- control    SERVICE_DISCOVERY_RESPONSE 1 channel(s), head unit='AiPlay' ...  [encrypted]
+     channel 3   av          stream_type=3
+...
+     channel 3 opened
+     sent 90 picture(s), 90 acked, 3.0s (30.0 fps)
+RESULT: handshake complete over in-band TLS, video channel streamed — receiver speaks Android Auto
 ```
 
 The same probe runs against a desktop harness (`tools/AaHarness.java`) that uses the identical
-`AaSession` code, so the client itself is verified.
+`AaSession` code. The probe is the *phone*: it is the TLS server (OpenSSL), the receiver the TLS
+client, and it fails with `WIRE MISMATCH` if the receiver deviates from aasdk's flags or encryption.
 
 ## Why not just port DiPlay?
 

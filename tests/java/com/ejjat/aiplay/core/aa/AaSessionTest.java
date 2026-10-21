@@ -2,39 +2,24 @@ package com.ejjat.aiplay.core.aa;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetSocketAddress;
-import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 
 /**
  * Contract tests for the Android Auto control session.
  *
- * <p>The second test is a real loopback TLS handshake: server and client contexts are built from a
- * throwaway keystore that {@code tools/test.sh} generates with keytool. It proves the endpoint
- * negotiates TLS, speaks the frame format and answers the handshake in the documented order.</p>
+ * <p>These run the session in plaintext mode (no TLS) so channel logic is tested on its own; the
+ * in-band TLS handshake over a real TCP loopback is {@code AaTransportTest}.</p>
  */
 public class AaSessionTest {
 
@@ -66,7 +51,7 @@ public class AaSessionTest {
                 sink(events), discovery());
 
         session.handle(AaFrame.control(AaMessageType.VERSION_RESPONSE,
-                new byte[]{0x08, 0x01, 0x10, 0x06, 0x18, 0x00}));
+                AaControl.versionResponse(1, 1, 0)));
         session.handle(AaFrame.control(AaMessageType.SERVICE_DISCOVERY_REQUEST,
                 new ProtoWriter().string(4, "Pixel").string(5, "Google").toByteArray()));
 
@@ -104,16 +89,6 @@ public class AaSessionTest {
         assertEquals(AaChannel.VIDEO, reply.channel);
         assertTrue(reply.control);
         assertEquals(AaMessageType.CHANNEL_OPEN_RESPONSE, reply.messageId);
-        assertEquals(AaControl.STATUS_OK, reply.payload[1]);
-    }
-
-    @Test
-    public void stillAcceptsAControlChannelOpenForVideo() throws Exception {
-        Rig rig = new Rig();
-        rig.session.handle(AaFrame.control(AaMessageType.CHANNEL_OPEN_REQUEST,
-                new ProtoWriter().varint(1, 0).varint(2, AaChannel.VIDEO).toByteArray()));
-        AaFrame reply = rig.next();
-        assertEquals(AaChannel.CONTROL, reply.channel);
         assertEquals(AaControl.STATUS_OK, reply.payload[1]);
     }
 
@@ -259,96 +234,6 @@ public class AaSessionTest {
         assertEquals(-1, session.pump(new byte[64]));
     }
 
-    @Test
-    public void completesRealTlsHandshakeAndControlExchange() throws Exception {
-        String keystorePath = System.getProperty("aiplay.test.keystore");
-        if (keystorePath == null || !new File(keystorePath).isFile()) {
-            fail("aiplay.test.keystore not set — run through tools/test.sh");
-        }
-
-        SSLServerSocket serverSocket = (SSLServerSocket) serverContext(keystorePath)
-                .getServerSocketFactory().createServerSocket();
-        serverSocket.setReuseAddress(true);
-        serverSocket.bind(new InetSocketAddress("127.0.0.1", 0));
-        final int port = serverSocket.getLocalPort();
-
-        final AtomicReference<Throwable> serverFailure = new AtomicReference<Throwable>();
-        final List<String> serverEvents = new ArrayList<String>();
-
-        Thread serverThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                SSLSocket socket = null;
-                try {
-                    socket = (SSLSocket) serverSocket.accept();
-                    socket.setSoTimeout(8000);
-                    socket.startHandshake();
-                    AaSession session = new AaSession(socket.getInputStream(),
-                            socket.getOutputStream(), sink(serverEvents), discovery());
-                    session.begin();
-                    byte[] buffer = new byte[4096];
-                    for (int i = 0; i < 4; i++) {
-                        if (session.pump(buffer) < 0) {
-                            break;
-                        }
-                    }
-                } catch (Throwable error) {
-                    serverFailure.set(error);
-                } finally {
-                    closeQuietly(socket);
-                }
-            }
-        }, "aiplay-test-server");
-        serverThread.start();
-
-        SSLSocket client = null;
-        try {
-            client = (SSLSocket) clientContext().getSocketFactory()
-                    .createSocket("127.0.0.1", port);
-            client.setSoTimeout(8000);
-            client.startHandshake();
-
-            InputStream in = client.getInputStream();
-            OutputStream out = client.getOutputStream();
-
-            AaFrame versionRequest = readFrame(in);
-            assertEquals(AaMessageType.VERSION_REQUEST, versionRequest.messageId);
-
-            out.write(AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.VERSION_RESPONSE,
-                    new byte[]{0x08, 0x01, 0x10, 0x06, 0x18, 0x00}));
-            out.flush();
-            assertEquals(AaMessageType.AUTH_COMPLETE, readFrame(in).messageId);
-
-            out.write(AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.SERVICE_DISCOVERY_REQUEST,
-                    new ProtoWriter().string(4, "TestPhone").toByteArray()));
-            out.flush();
-            AaFrame discoveryReply = readFrame(in);
-            assertEquals(AaMessageType.SERVICE_DISCOVERY_RESPONSE, discoveryReply.messageId);
-            assertTrue(discoveryReply.payload.length > 4);
-
-            out.write(AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.PING_REQUEST, AaControl.pingRequest(7L)));
-            out.flush();
-            assertEquals(AaMessageType.PING_RESPONSE, readFrame(in).messageId);
-        } finally {
-            closeQuietly(client);
-            closeQuietly(serverSocket);
-        }
-
-        serverThread.join(8000);
-        assertTrue("server thread did not finish", !serverThread.isAlive());
-        if (serverFailure.get() != null) {
-            throw new AssertionError("server failed: " + serverFailure.get(), serverFailure.get());
-        }
-        String events = serverEvents.toString();
-        assertNotNull(events);
-        assertTrue("server should announce its version: " + events,
-                events.contains("sent control/VERSION_REQUEST"));
-        assertTrue("server should record the peer's discovery: " + events,
-                events.contains("service discovery from"));
-    }
-
-    // ---- helpers ---------------------------------------------------------------------------
-
     private static AaSession.Sink sink(final List<String> events) {
         return new AaSession.Sink() {
             @Override
@@ -394,42 +279,6 @@ public class AaSessionTest {
             read += n;
         }
         return true;
-    }
-
-    private static SSLContext serverContext(String path) throws Exception {
-        KeyStore keyStore = KeyStore.getInstance("PKCS12");
-        FileInputStream input = new FileInputStream(path);
-        try {
-            keyStore.load(input, "aiplay".toCharArray());
-        } finally {
-            input.close();
-        }
-        KeyManagerFactory factory =
-                KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        factory.init(keyStore, "aiplay".toCharArray());
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(factory.getKeyManagers(), null, null);
-        return context;
-    }
-
-    private static SSLContext clientContext() throws Exception {
-        TrustManager[] trustAll = new TrustManager[]{new X509TrustManager() {
-            @Override
-            public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) {
-            }
-
-            @Override
-            public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) {
-            }
-
-            @Override
-            public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-                return new java.security.cert.X509Certificate[0];
-            }
-        }};
-        SSLContext context = SSLContext.getInstance("TLS");
-        context.init(null, trustAll, null);
-        return context;
     }
 
     private static void closeQuietly(java.io.Closeable closeable) {

@@ -28,7 +28,7 @@ public final class AaReceiverService extends Service {
     private static final int NOTIFICATION_ID = 1001;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
 
-    private AaTlsServer server;
+    private AaServer server;
     private MdnsAdvertiser advertiser;
 
     public static boolean isRunning() {
@@ -83,7 +83,7 @@ public final class AaReceiverService extends Service {
             return;
         }
         int port = Prefs.receiverPort();
-        server = new AaTlsServer(this, port, new AaTlsServer.Listener() {
+        server = new AaServer(this, port, new AaServer.Listener() {
             @Override
             public void onEvent(String message) {
                 // Already recorded by Diag inside the server.

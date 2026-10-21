@@ -12,7 +12,7 @@ second on a 2018 MediaTek head unit with 2 GB of RAM.
 ├──────────────────────────────────────────────────────────────┤
 │ device/      Thin Android adapters: probe, shell, prefs, log │
 ├──────────────────────────────────────────────────────────────┤
-│ receiver/    Foreground service, TLS listener, mDNS          │
+│ receiver/    Foreground service, TCP listener, mDNS          │
 ├──────────────────────────────────────────────────────────────┤
 │ core/        PURE JAVA. No android.* import. JVM-tested.     │
 └──────────────────────────────────────────────────────────────┘
@@ -51,14 +51,14 @@ The `core/` boundary is enforced twice:
 
 ```
 AaReceiverService (foreground, connectedDevice)
-   ├── AaTlsServer      SSLServerSocket, PKCS12 identity from res/raw
+   ├── AaServer         ServerSocket (plain AA), PKCS12 identity from res/raw for in-band TLS
    │      └── AaSession (core)  ← pure control-plane logic
    └── MdnsAdvertiser   NsdManager `_androidauto._tcp`
 ```
 
-`AaTlsServer` does only three things: load the keystore, accept sockets, hand the streams
+`AaServer` does only three things: load the keystore, accept sockets, hand the streams
 to `AaSession`. Everything protocol-shaped lives in `core`, which is why the handshake can
-be integration-tested on a desktop JVM over a real TLS socket.
+be integration-tested on a desktop JVM over a real TCP socket with TLS carried in-band.
 
 ## 5. UI
 
@@ -81,7 +81,7 @@ with no AppCompat, no Material Components and no resource indirection.
 | --- | --- |
 | Probe + evaluate | `aiplay-probe` thread, result posted to main |
 | Privileged shell | `aiplay-fix` thread |
-| TLS accept | `aiplay-accept` thread |
+| TCP accept | `aiplay-accept` thread |
 | Session I/O | one thread per connection (`aiplay-session-N`) |
 | Animation | main thread, one `ValueAnimator` |
 
@@ -92,6 +92,6 @@ without a service.
 
 * A probe that throws returns a partial profile rather than crashing the home screen.
 * A shell that times out returns `code = -1` with the partial output and is shown verbatim.
-* A TLS or mDNS failure stops the service and records the reason; the UI never shows
+* A keystore or mDNS failure stops the service and records the reason; the UI never shows
   "running" for a receiver that is not listening.
 * The splash has a 4 s watchdog so a broken animation cannot trap the driver.
