@@ -92,7 +92,43 @@ launchable-activity: name='com.ejjat.aiplay.ui.SplashActivity'
 * Palette contrast: `TEXT0` on `BG1` = 15.8:1, `TEXT1` on `SURFACE` = 7.4:1, `TEXT2` on
   `SURFACE` = 3.9:1 (used only for tertiary labels ≥ 12 sp).
 
-## 6. What could not be tested here, and why
+## 6. Receiver probe (validated)
+
+`tools/aa-probe.py` is the client half of the handshake. It is validated against
+`tools/AaHarness.java`, a desktop server that runs the **same** `AaSession` class the Android
+service uses:
+
+```
+$ java -cp build/test/classes:build/harness AaHarness 5277 build/test/keystore.p12 &
+$ python3 tools/aa-probe.py 127.0.0.1 --verbose
+connected  : tls TLSv1.3 / TLS_AES_256_GCM_SHA384
+<- VERSION_REQUEST            2 field(s), 4 byte(s)
+-> VERSION_RESPONSE           version 1.6 status=0
+<- AUTH_COMPLETE              status=0
+-> SERVICE_DISCOVERY_REQUEST  device='AiPlay probe'
+<- SERVICE_DISCOVERY_RESPONSE 4 channel(s), head unit='AiPlay harness', model='Desktop', sw='0.1.0'
+-> PING_REQUEST               timestamp=1234567
+<- PING_RESPONSE              1 field(s), 6 byte(s)
+-> CHANNEL_OPEN_REQUEST       channel 1 priority 1
+<- CHANNEL_OPEN_RESPONSE      status=1 (FAIL)
+RESULT: handshake complete — receiver is speaking Android Auto
+```
+
+This proves the protocol path end to end on the JVM. The remaining unknown is Android's own
+`NsdManager`/keystore plumbing on a real device — that is what the phone test below covers.
+
+## 7. Phone test (the next step, needs no car)
+
+```sh
+adb install -r build/AiPlay-0.1.0.apk
+# in the app: Start wireless receiver
+python3 tools/aa-probe.py <phone-ip>
+```
+
+Pass criteria: `RESULT: handshake complete`, plus `adb logcat -s AiPlay` showing
+`mdns: registered …` and `receiver: tls handshake ok`.
+
+## 8. What could not be tested here, and why
 
 **An Android emulator was attempted and abandoned.** The largest VM profile available in this
 workspace is 3 GiB (3 vCPU). A headless API 30 x86_64 AVD with `-memory 768 -gpu off` was
@@ -112,10 +148,10 @@ commands are ready in `tools/device-test.sh` so the first run on real hardware t
 | The app installs and launches on a real ROM | not run (L6) |
 | The probe returns the same verdict a real ROM deserves | logic tested, probe untested |
 | `pm enable` actually turns Android Auto on | command string tested, execution untested |
-| A phone discovers `_androidauto._tcp` and completes TLS | protocol tested, radio untested |
+| A phone discovers `_androidauto._tcp` and completes TLS | protocol tested on JVM; radio untested (run §7) |
 | Video/audio/touch projection | not implemented (0.2.0) |
 
-## 7. Device test script (for the first real run)
+## 9. Device test script (for the first real run)
 
 `tools/device-test.sh` (included) performs:
 

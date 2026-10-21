@@ -65,6 +65,47 @@ geometry, palette and easing constants as `SplashView.java` and `HomeActivity.ja
 not device screenshots — see [docs/TESTING.md](docs/TESTING.md) for what was and was not run
 on hardware.
 
+## Test it on a phone
+
+Yes — AiPlay installs and runs on any Android 7+ phone. What a phone can and cannot tell you:
+
+| On a phone | Works? | Notes |
+| --- | --- | --- |
+| Splash + home rendering | **yes** | best way to see the real animation |
+| Capability audit | **yes** | most phones report P1 (Android Auto present and enabled) |
+| Diagnostics / settings | **yes** | report saves to `Android/data/com.ejjat.aiplay/files/reports/` |
+| `Enable Android Auto` | pointless | the phone already has it enabled |
+| Receiver handshake | **yes, from a laptop** | phone acts as the head unit; see below |
+| Projection into the phone | no | a phone cannot project into itself, and 0.1.0 has no video channel |
+
+### Prove the receiver works, phone + laptop
+
+```sh
+# 1. install on the phone
+adb install -r AiPlay-0.1.0.apk
+
+# 2. same Wi-Fi for both, then in the app tap "Start wireless receiver"
+# 3. from the laptop:
+python3 tools/aa-probe.py <phone-ip>
+```
+
+Expected output:
+
+```
+connected  : tls TLSv1.3 / TLS_AES_256_GCM_SHA384
+<- VERSION_REQUEST            2 field(s), 4 byte(s)
+-> VERSION_RESPONSE           version 1.6 status=0
+<- AUTH_COMPLETE              status=0
+-> SERVICE_DISCOVERY_REQUEST  device='AiPlay probe'
+<- SERVICE_DISCOVERY_RESPONSE 4 channel(s), head unit='AiPlay', model='Android head unit'
+-> PING_REQUEST               timestamp=1234567
+<- PING_RESPONSE              1 field(s), 6 byte(s)
+RESULT: handshake complete — receiver is speaking Android Auto
+```
+
+The same probe runs against a desktop harness (`tools/AaHarness.java`) that uses the identical
+`AaSession` code, so the client itself is verified.
+
 ## Why not just port DiPlay?
 
 Because DiPlay is a **CarPlay** receiver. It speaks AirPlay, RTSP, RTP, IAP2 and MFi — an
@@ -87,7 +128,7 @@ docs/TESTING.md       what is tested, how, and what could not be tested here
 docs/ROADMAP.md       0.2.0 → 1.0.0
 app/                  manifest, resources, Java sources (no AndroidX)
 tests/                JUnit 4 suite for the pure core (runs on a desktop JVM)
-tools/                build.sh, test.sh, gen-icons.py
+tools/                build.sh, test.sh, gen-icons.py, aa-probe.py, AaHarness.java
 ```
 
 ## Licence
