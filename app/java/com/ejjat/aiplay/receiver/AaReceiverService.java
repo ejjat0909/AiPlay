@@ -28,6 +28,10 @@ public final class AaReceiverService extends Service {
     private static final int NOTIFICATION_ID = 1001;
     private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
 
+    /** Serialises starting and stopping; the start runs on its own thread, stop may come any time. */
+    private final Object lifecycle = new Object();
+    private Thread startThread;
+
     private AaServer server;
     private MdnsAdvertiser advertiser;
     private BluetoothBootstrapServer bluetooth;
@@ -49,8 +53,7 @@ public final class AaReceiverService extends Service {
             }
         } catch (RuntimeException error) {
             Diag.log("receiver", "could not start service", error);
-            ReceiverState.set(ReceiverState.State.FAILED, "Android refused to start the service: "
-                    + error.getMessage());
+            ReceiverState.set(ReceiverState.State.FAILED, refusal(error));
         }
     }
 
@@ -79,11 +82,39 @@ public final class AaReceiverService extends Service {
             return START_NOT_STICKY;
         }
         startForegroundCompat();
-        startEndpoint();
+        beginStart();
         return START_STICKY;
     }
 
+    /**
+     * Starting means loading the keystore, binding the port, registering mDNS and opening Bluetooth,
+     * which takes seconds on a slow unit. {@code onStartCommand} runs on the main thread, so doing it
+     * there froze the screen: the "Starting..." state was set but never drawn before the work
+     * finished, which defeated the whole point of showing it (and risks an ANR on a slow head unit).
+     */
+    private void beginStart() {
+        synchronized (lifecycle) {
+            if (RUNNING.get() || (startThread != null && startThread.isAlive())) {
+                Diag.log("receiver", "already running or starting");
+                return;
+            }
+            startThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    startEndpoint();
+                }
+            }, "aiplay-receiver-start");
+            startThread.start();
+        }
+    }
+
     private void startEndpoint() {
+        synchronized (lifecycle) {
+            startEndpointLocked();
+        }
+    }
+
+    private void startEndpointLocked() {
         if (RUNNING.get()) {
             Diag.log("receiver", "already running");
             return;
@@ -118,16 +149,36 @@ public final class AaReceiverService extends Service {
         ReceiverState.set(ReceiverState.State.RUNNING, "");
     }
 
+    /**
+     * Why Android refused to start the service. Since Android 12 an app in the background may not
+     * start a foreground service, which is exactly the situation of a start triggered by the
+     * ignition; the fix is the user's, so say so instead of printing an exception name.
+     */
+    static String refusal(RuntimeException error) {
+        if (error.getClass().getSimpleName().contains("NotAllowed")) {
+            return "Android does not let an app in the background start this. In AiPlay's "
+                    + "Settings, allow background start (battery optimization), or open AiPlay "
+                    + "and press Start.";
+        }
+        return "Android refused to start the service: " + error.getMessage();
+    }
+
     private static String describe(Exception error) {
         String message = error.getMessage();
         if (error instanceof java.net.BindException) {
-            return "port " + Prefs.receiverPort() + " is already in use ("
-                    + (message == null ? "bind failed" : message) + ")";
+            return "port " + Prefs.receiverPort() + " is already in use by another app. Close it, "
+                    + "or change the receiver port in Settings.";
         }
         return error.getClass().getSimpleName() + (message == null ? "" : ": " + message);
     }
 
     private void stopEndpoint() {
+        synchronized (lifecycle) {
+            stopEndpointLocked();
+        }
+    }
+
+    private void stopEndpointLocked() {
         if (bluetooth != null) {
             bluetooth.stop();
             bluetooth = null;

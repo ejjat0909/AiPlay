@@ -13,6 +13,21 @@
     <string name="settings_wifi_key_hint">Password (empty for an open network)</string>
     <string name="settings_wifi_hint">The phone is told over Bluetooth to join this network and then connect to this unit. The password is stored on this device, unencrypted, and sent only to a phone that connects to AiPlay\'s Bluetooth service.</string>
 
+    <!-- Ignition (ACC) -->
+    <string name="settings_start_on_ignition">Start when the ignition turns on</string>
+    <string name="settings_stop_on_ignition_off">Stop when the ignition turns off</string>
+    <string name="settings_acc_title">This unit\'s ACC signals</string>
+    <string name="settings_acc_unset">ACC signals from this unit: not set (tap to set)</string>
+    <string name="settings_acc">ACC signals: on = %1$s, off = %2$s</string>
+    <string name="settings_acc_on_hint">ACC-on broadcast action</string>
+    <string name="settings_acc_off_hint">ACC-off broadcast action</string>
+    <string name="settings_acc_hint">Android has no standard ignition signal. AiPlay reacts to boot, fast-boot resume, screen on, unlock and car mode. If your unit broadcasts its own ACC action, type it here; find it by watching `adb logcat` while you switch the ignition.</string>
+
+    <string name="settings_background_allowed">Background start: allowed</string>
+    <string name="settings_background_blocked">Background start: blocked (tap to allow)</string>
+    <string name="settings_background_unavailable">This unit has no battery-optimization screen. Look for an autostart or background-apps setting in its own settings.</string>
+    <string name="settings_background_hint">Starting at ignition happens in the background. Since Android 12 that is refused unless AiPlay is exempt from battery optimization. Older Android has no such limit.</string>
+
     <!-- Projection -->
     <string name="projection_waiting">Waiting for the phone\'s video…</string>
     <string name="projection_ended">The phone stopped projecting</string>

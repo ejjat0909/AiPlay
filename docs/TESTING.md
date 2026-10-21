@@ -117,6 +117,7 @@ adb shell wm size reset && adb shell wm density reset
 | `aa.AaChannelsTest` | 19 | Input / sensor / audio: hand-computed wire bytes, binding accepted only for advertised keys, touch not sent until bound, sensor refused for unoffered types, audio focus, every audio channel set up/start/ack/stop |
 | `input.TouchMapperTest` | 5 | Letterbox mapping on 16:9, 1024x600, 1280x480 and portrait panels; bar taps outside; edge clamping |
 | `audio.AudioCoreTest` | 10 | Bounded PCM queue (drops the oldest, never blocks, finish() keeps the tail), music ducking policy |
+| `ignition.IgnitionPolicyTest` | 11 | Start/stop decisions: every on signal, debounce of a multi-signal wake, an explicit off ending the wake-up (ACC drop while cranking), screen timeout is not off, custom actions, disabled switches |
 | `ReceiverIdentityTest` | 2 | The committed TLS identity loads and is not PBES2 (older Android cannot read it) |
 | `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |
@@ -270,3 +271,20 @@ stream was written *and played* in full and that the music was ducked and restor
 Verified on an API 34 emulator at 1920x1080, `wm size` 1024x600 and 1280x480. Audio goes to the emulator's
 AudioFlinger (confirmed with `dumpsys media.audio_flinger`: right sample rates and channel masks, right
 usage types, the mixer consumed every frame); what is *heard* cannot be checked here.
+
+
+## Ignition test (0.2.0-alpha7)
+
+`tools/ignition-test.sh -s <serial> [--exempt]` configures the feature through the **real Settings screen**
+(it taps the switches and types two made-up ACC actions into the dialog), puts the app in the background for
+30 s so it is genuinely backgrounded, then sends what a unit would: the custom ACC on/off actions, car mode
+on/off (`cmd uimode car`), screen sleep/wake, `QUICKBOOT_POWERON` to a killed process, and finally a **real
+reboot**. It checks the receiver's state from the log after each. Without `--exempt` on Android 12+ it passes
+when the start is refused *and the screen says why*; with `--exempt` (the battery-optimization allowlist, what
+the Settings row asks for) it passes when every signal starts or stops the receiver.
+
+Results: API 34 emulator 11 of 11 without the exemption, 13 of 13 with it; API 30 emulator 11 of 11 with no
+exemption (there is no background restriction before Android 12), with the two car-mode steps skipped because
+`cmd uimode car` does not exist on Android 11. Two things the test taught
+that are easy to get wrong: `am broadcast -a BOOT_COMPLETED` is *not* a boot (use a real reboot), and an app
+that was on screen moments ago can start a foreground service during a grace period, so a test must wait.

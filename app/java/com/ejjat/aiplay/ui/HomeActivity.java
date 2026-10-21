@@ -509,6 +509,8 @@ public final class HomeActivity extends Activity {
                 break;
         }
         receiverLine.setText(text);
+        com.ejjat.aiplay.device.Diag.log("home", "receiver line shows: "
+                + text.replace('\n', '|') + " (" + state + ")");
         receiverLine.setTextColor(state == ReceiverState.State.FAILED ? Ui.WARN : Ui.TEXT2);
         if (receiverSpinner != null) {
             receiverSpinner.setVisibility(state == ReceiverState.State.STARTING

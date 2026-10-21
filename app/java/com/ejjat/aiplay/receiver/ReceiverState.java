@@ -3,6 +3,8 @@ package com.ejjat.aiplay.receiver;
 import android.os.Handler;
 import android.os.Looper;
 
+import com.ejjat.aiplay.device.Diag;
+
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -69,6 +71,8 @@ public final class ReceiverState {
     }
 
     static void set(final State next, final String text) {
+        Diag.log("receiver", "state " + state + " -> " + next
+                + (text == null || text.length() == 0 ? "" : ": " + text));
         state = next;
         detail = text == null ? "" : text;
         MAIN.removeCallbacks(TIMEOUT);

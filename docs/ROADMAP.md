@@ -37,7 +37,7 @@ Acceptance: a real phone completes discovery **and** renders its UI on the head 
 
 - [ ] Arabic, Malay, Simplified Chinese translations
 - [ ] Multi-window / split-screen behaviour on 1280×480 bars
-- [ ] Auto-start on car ignition (ACC) detection
+- [x] Auto-start on car ignition (ACC) detection, as far as a unit lets an app know (0.2.0-alpha7, see IGNITION.md): boot, fast-boot resume, screen on/unlock, car mode, the unit's own action; Android 12+ needs the battery exemption. **Not tried on any real unit.**
 
 ## 1.0.0 — Stable
 

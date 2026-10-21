@@ -16,6 +16,10 @@ public final class Prefs {
     private static final String KEY_SPLASH_SEEN = "splash_seen";
     private static final String KEY_WIFI_SSID = "wifi_ssid";
     private static final String KEY_WIFI_KEY = "wifi_key";
+    private static final String KEY_START_ON_IGNITION = "start_on_ignition";
+    private static final String KEY_STOP_ON_IGNITION_OFF = "stop_on_ignition_off";
+    private static final String KEY_ACC_ON_ACTION = "acc_on_action";
+    private static final String KEY_ACC_OFF_ACTION = "acc_off_action";
 
     private static SharedPreferences prefs;
 
@@ -107,5 +111,37 @@ public final class Prefs {
     public static void setWifi(String ssid, String key) {
         p().edit().putString(KEY_WIFI_SSID, ssid == null ? "" : ssid.trim())
                 .putString(KEY_WIFI_KEY, key == null ? "" : key).apply();
+    }
+
+    /** Start the receiver when the car's ignition turns on, as far as the unit lets the app know. */
+    public static boolean startOnIgnition() {
+        return p().getBoolean(KEY_START_ON_IGNITION, false);
+    }
+
+    public static void setStartOnIgnition(boolean value) {
+        p().edit().putBoolean(KEY_START_ON_IGNITION, value).apply();
+    }
+
+    /** Stop the receiver on an explicit ignition-off signal (car mode exit or the unit's own action). */
+    public static boolean stopOnIgnitionOff() {
+        return p().getBoolean(KEY_STOP_ON_IGNITION_OFF, false);
+    }
+
+    public static void setStopOnIgnitionOff(boolean value) {
+        p().edit().putBoolean(KEY_STOP_ON_IGNITION_OFF, value).apply();
+    }
+
+    /** The head unit's own ACC-on broadcast action, typed in by the user ("" = none). */
+    public static String accOnAction() {
+        return p().getString(KEY_ACC_ON_ACTION, "");
+    }
+
+    public static String accOffAction() {
+        return p().getString(KEY_ACC_OFF_ACTION, "");
+    }
+
+    public static void setAccActions(String on, String off) {
+        p().edit().putString(KEY_ACC_ON_ACTION, on == null ? "" : on.trim())
+                .putString(KEY_ACC_OFF_ACTION, off == null ? "" : off.trim()).apply();
     }
 }

@@ -2,6 +2,58 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha7] — 2026-10-21
+
+Ignition (ACC) start, and the Start button's feedback fixed for real. Verified on emulators; **no real head
+unit has been tried**, and which ignition signal a unit sends is unknown.
+
+### Added
+
+* **Start on ignition** (`docs/IGNITION.md`). Settings: *Start when the ignition turns on*, *Stop when the
+  ignition turns off* (off by default), and *This unit's ACC signals* for a unit that broadcasts its own
+  action. AiPlay reacts to `BOOT_COMPLETED`, `QUICKBOOT_POWERON` (Android's and HTC's spelling, manifest, so it
+  works with the process dead), screen on, unlock, car mode, and the typed actions. A wake that fires several
+  signals starts the receiver once (10 s debounce); an explicit off ends that wake-up, so an ACC drop while
+  cranking restarts it. `SCREEN_OFF` is not an off signal. Decisions are in `IgnitionPolicy` (12 tests).
+* **Background start** row in Settings: shows whether AiPlay is exempt from battery optimization and opens the
+  system prompt to allow it. Needed on Android 12+, where a background app may not start a foreground service.
+  A refusal now reads "Android does not let an app in the background start this. In AiPlay's Settings, allow
+  background start (battery optimization), or open AiPlay and press Start." instead of an exception name.
+* `tools/ignition-test.sh`: drives the real Settings screen, sends the signals, finishes with a real reboot.
+
+### Fixed
+
+* **The Start button's "Starting…" was never drawn.** The service's `onStartCommand` runs on the main thread
+  and did all the startup there (keystore, port, mDNS, Bluetooth: ~2.5 s on a slow unit), so the screen froze
+  before the new state was painted and the spinner never appeared. Startup now runs on its own thread; the
+  screen updates 22 ms after the state change and the spinner is visible for the whole start (checked frame by
+  frame on a screen recording). This was also an ANR risk on a slow head unit.
+* The "port in use" message is plain: "port 5277 is already in use by another app. Close it, or change the
+  receiver port in Settings."
+* `IgnitionPolicy` first treated an off-then-on within the debounce window as one wake-up; a test whose own
+  name said otherwise showed it was wrong.
+
+### Verified
+
+* JVM: 164 tests; mutations (no reset on stop, no debounce) each fail 2 tests.
+* Emulator, Android 14: with the app exempt, all 13 checks pass from a genuinely background app: custom ACC
+  on/off, car mode on/off, screen wake, `QUICKBOOT_POWERON` to a dead process, a real reboot. Without the
+  exemption, 11 of 11: every signal is decided on, the background start is refused with the explanation, and a
+  real boot still starts (boot is exempt). Settings row: tap, system prompt, Allow, row shows "allowed".
+* Emulator, Android 11: `ignition-test.sh` 11 of 11 with no exemption (the background restriction does not exist
+  before Android 12): custom ACC on/off, screen wake, `QUICKBOOT_POWERON` to a dead process and a real reboot all
+  start the receiver. Car mode is skipped there (no `cmd uimode car` before Android 12). `device-test.sh` also
+  passes in full on Android 11 (touch, keys, sensors, all three audio streams).
+* The first Bluetooth RFCOMM service start on an Android runtime: `listening for the phone on RFCOMM service
+  4de17a00-...` (no phone to connect, so only the listening half).
+
+### Not verified
+
+* **Any real head unit.** If your unit's ACC produces none of these signals, nothing here helps; use the
+  "finding your unit's own ACC action" steps in `docs/IGNITION.md`.
+* Units that kill background apps while parked will not deliver the runtime signals (boot and quick-boot still
+  arrive).
+
 ## [0.2.0-alpha6] — 2026-10-21
 
 Start-button feedback, touch input, sensors and audio. Everything is verified on an emulator against a stand-in
