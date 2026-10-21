@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -54,7 +55,13 @@
         <service
             android:name=".receiver.AaReceiverService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|specialUse">
+            <!-- Android 14 rejects connectedDevice when no Bluetooth/USB grant exists (common on a
+                 phone used only over Wi-Fi). specialUse is the sanctioned fallback. -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local Android Auto projection endpoint on the LAN" />
+        </service>
 
         <receiver android:name=".device.BootReceiver" android:exported="true">
             <intent-filter>

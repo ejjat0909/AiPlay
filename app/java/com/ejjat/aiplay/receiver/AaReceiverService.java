@@ -161,11 +161,24 @@ public final class AaReceiverService extends Service {
                 .setOngoing(true)
                 .build();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification);
+            return;
+        }
+        try {
             startForeground(NOTIFICATION_ID, notification,
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+        } catch (SecurityException refused) {
+            // Android 14+ requires a Bluetooth/USB grant for connectedDevice. A phone used purely
+            // over Wi-Fi has neither, so fall back to the sanctioned specialUse type.
+            Diag.log("receiver", "connectedDevice FGS refused, falling back to specialUse", refused);
+            try {
+                startForeground(NOTIFICATION_ID, notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } catch (RuntimeException failed) {
+                Diag.log("receiver", "foreground service unavailable on this ROM", failed);
+                stopSelf();
+            }
         }
     }
 }
