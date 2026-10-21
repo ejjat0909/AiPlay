@@ -14,6 +14,8 @@ public final class Prefs {
     private static final String KEY_AUTO_START_RECEIVER = "auto_start_receiver";
     private static final String KEY_VERBOSE = "verbose_log";
     private static final String KEY_SPLASH_SEEN = "splash_seen";
+    private static final String KEY_WIFI_SSID = "wifi_ssid";
+    private static final String KEY_WIFI_KEY = "wifi_key";
 
     private static SharedPreferences prefs;
 
@@ -87,5 +89,23 @@ public final class Prefs {
 
     public static void setVerbose(boolean value) {
         p().edit().putBoolean(KEY_VERBOSE, value).apply();
+    }
+
+    /** Name of the Wi-Fi network the phone is told to join over Bluetooth ("" = use the current one). */
+    public static String wifiSsid() {
+        return p().getString(KEY_WIFI_SSID, "");
+    }
+
+    /**
+     * Password of that network. Android will not reveal the password of the network the unit is on,
+     * so it is typed in once and kept in this app's private preferences (not encrypted).
+     */
+    public static String wifiKey() {
+        return p().getString(KEY_WIFI_KEY, "");
+    }
+
+    public static void setWifi(String ssid, String key) {
+        p().edit().putString(KEY_WIFI_SSID, ssid == null ? "" : ssid.trim())
+                .putString(KEY_WIFI_KEY, key == null ? "" : key).apply();
     }
 }

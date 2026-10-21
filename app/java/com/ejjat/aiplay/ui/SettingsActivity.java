@@ -79,6 +79,17 @@ public final class SettingsActivity extends Activity {
         });
         root.addView(port);
 
+        root.addView(Ui.spacer(this, 12));
+        TextView wifi = Ui.text(this, wifiLine(), 14, Ui.TEXT1);
+        wifi.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                editWifi((TextView) view);
+            }
+        });
+        root.addView(wifi);
+        root.addView(Ui.caption(this, getString(R.string.settings_wifi_hint)));
+
         root.addView(Ui.spacer(this, 26));
         root.addView(Ui.caption(this, "AiPlay " + BuildConfig.VERSION_NAME
                 + " · GPL-3.0 · unofficial, not affiliated with Google"));
@@ -132,6 +143,49 @@ public final class SettingsActivity extends Activity {
                         } catch (NumberFormatException ignored) {
                             // keep the previous value
                         }
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private String wifiLine() {
+        String ssid = Prefs.wifiSsid();
+        if (ssid.length() == 0) {
+            return getString(R.string.settings_wifi_unset);
+        }
+        return getString(R.string.settings_wifi, ssid,
+                Prefs.wifiKey().length() == 0 ? getString(R.string.settings_wifi_open)
+                        : getString(R.string.settings_wifi_protected));
+    }
+
+    private void editWifi(final TextView line) {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int pad = Ui.dp(this, 20);
+        form.setPadding(pad, Ui.dp(this, 8), pad, 0);
+
+        final EditText ssid = new EditText(this);
+        ssid.setHint(R.string.settings_wifi_ssid_hint);
+        ssid.setSingleLine(true);
+        ssid.setText(Prefs.wifiSsid());
+        form.addView(ssid);
+
+        final EditText key = new EditText(this);
+        key.setHint(R.string.settings_wifi_key_hint);
+        key.setSingleLine(true);
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setText(Prefs.wifiKey());
+        form.addView(key);
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.settings_wifi_title)
+                .setView(form)
+                .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface dialog, int which) {
+                        Prefs.setWifi(ssid.getText().toString(), key.getText().toString());
+                        line.setText(wifiLine());
                     }
                 })
                 .setNegativeButton(android.R.string.cancel, null)

@@ -41,6 +41,7 @@ import com.ejjat.aiplay.ui.view.RingGauge;
 public final class HomeActivity extends Activity {
 
     private static final int REQUEST_NOTIFICATIONS = 41;
+    private boolean askedPermissions;
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -409,16 +410,31 @@ public final class HomeActivity extends Activity {
     }
 
     private void startReceiver() {
-        if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
-                    REQUEST_NOTIFICATIONS);
+        // Notifications (Android 13+) are needed for the foreground notification; Bluetooth
+        // (Android 12+) and location are for the phone-finds-receiver step and are optional: the
+        // receiver starts whatever is answered. Ask once per start, in one prompt.
+        java.util.List<String> missing = new java.util.ArrayList<String>();
+        if (Build.VERSION.SDK_INT >= 33) {
+            addIfMissing(missing, Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (Build.VERSION.SDK_INT >= 31) {
+            addIfMissing(missing, Manifest.permission.BLUETOOTH_CONNECT);
+        }
+        addIfMissing(missing, Manifest.permission.ACCESS_FINE_LOCATION);
+        if (!missing.isEmpty() && !askedPermissions) {
+            askedPermissions = true;
+            requestPermissions(missing.toArray(new String[0]), REQUEST_NOTIFICATIONS);
             return;
         }
         AaReceiverService.start(this);
         toast(getString(R.string.toast_receiver_started));
         updateReceiverLine();
+    }
+
+    private void addIfMissing(java.util.List<String> list, String permission) {
+        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            list.add(permission);
+        }
     }
 
     @Override

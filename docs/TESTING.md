@@ -113,6 +113,7 @@ adb shell wm size reset && adb shell wm density reset
 | `aa.AaSessionTest` | 14 | Channel logic in plaintext mode: ordering, channel open on its own channel, refusal of unserved channels, video setup/focus/start/stop, per-frame acks, split-framed 50 kB picture |
 | `aa.AaCryptorTest` | 6 | In-band TLS 1.2 against a server-mode engine that requires a client certificate and advertises a non-matching issuer; 7-byte flight fragments; garbage rejected |
 | `aa.AaTransportTest` | 3 | Real TCP loopback: raw version, in-band handshake, auth in the clear, encrypted video session, every message's flags/encryption, version mismatch, early encrypted frame |
+| `bt.WifiBootstrapTest` | 14 | Bluetooth bootstrap: UUID/ids, hand-computed wire bytes (zero-valued required fields included), reader fragmentation, full exchange over a loopback, no SSID => nothing sent, hang-up and silent-phone handling |
 | `ReceiverIdentityTest` | 2 | The committed TLS identity loads and is not PBES2 (older Android cannot read it) |
 | `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |

@@ -10,6 +10,7 @@ import android.view.View;
 import com.ejjat.aiplay.device.Diag;
 import com.ejjat.aiplay.device.Prefs;
 import com.ejjat.aiplay.receiver.AaReceiverService;
+import com.ejjat.aiplay.receiver.ProjectionHub;
 import com.ejjat.aiplay.ui.view.SplashView;
 
 /**
@@ -87,6 +88,13 @@ public final class SplashActivity extends Activity {
         }
         navigated = true;
         handler.removeCallbacksAndMessages(null);
+        if (ProjectionHub.get(this).isStreaming()) {
+            // A phone started projecting while the splash was still up (slow first launch, or the
+            // receiver was started by the splash itself). Home must not be pushed over the video.
+            Diag.log("splash", "a phone is already streaming; not opening Home");
+            finish();
+            return;
+        }
         startActivity(new Intent(this, HomeActivity.class));
         Ui.fadeIn(this);
         finish();

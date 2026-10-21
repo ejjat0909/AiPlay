@@ -18,7 +18,8 @@ Acceptance: a real phone completes discovery **and** renders its UI on the head 
 - [x] H.264 → `MediaCodec` → `SurfaceView` (`ProjectionActivity`) — compiles; **not yet run on a device**
 - [x] Transport rework: plain TCP, in-band TLS as the *client* via `SSL_HANDSHAKE`, per-frame encryption, raw version messages, flag semantics (0.2.0-alpha4, PROTOCOL.md 2.2–2.3) — verified on a JVM, against OpenSSL, and on an emulator; **not against a real phone**
 - [ ] **Open question: does a phone accept a self-signed head-unit certificate?** (PROTOCOL.md 2.4) — can only be answered with a phone
-- [ ] **Bluetooth bootstrap for wireless AA** (phone is told the head unit's address over Bluetooth, then connects over Wi-Fi) — needed for the phone to find AiPlay at all
+- [x] Bluetooth bootstrap message exchange (0.2.0-alpha5): RFCOMM service, `WifiStartRequest`/`WifiInfoResponse`; tested over a loopback, **RFCOMM glue never run on hardware** (PROTOCOL.md 8)
+- [ ] Make a phone actually connect: BLE advertisement of the service UUID and a headset-profile nudge, as the reference dongle does (PROTOCOL.md 8.2) — needs a real phone
 - [ ] Media audio: `AudioTrack` 48 kHz stereo with ack cadence
 - [ ] Speech audio with media ducking
 - [ ] Touch input: `TouchEventData` → `MotionEvent`, coordinate mapping per display

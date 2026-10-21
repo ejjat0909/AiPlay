@@ -34,6 +34,7 @@ public final class ProjectionHub implements AaSession.VideoSink, VideoDecoder.Li
 
     private volatile Listener listener;
     private volatile String status = "idle";
+    private volatile boolean streaming;
 
     private ProjectionHub(Context context) {
         this.context = context.getApplicationContext();
@@ -48,6 +49,11 @@ public final class ProjectionHub implements AaSession.VideoSink, VideoDecoder.Li
 
     public String status() {
         return status;
+    }
+
+    /** True from the phone's start indication until it stops (or the session ends). */
+    public boolean isStreaming() {
+        return streaming;
     }
 
     public void setListener(Listener listener) {
@@ -74,6 +80,7 @@ public final class ProjectionHub implements AaSession.VideoSink, VideoDecoder.Li
 
     @Override
     public void onVideoStart(int session, int config) {
+        streaming = true;
         publish("phone started streaming");
         main.post(new Runnable() {
             @Override
@@ -90,6 +97,7 @@ public final class ProjectionHub implements AaSession.VideoSink, VideoDecoder.Li
 
     @Override
     public void onVideoStop() {
+        streaming = false;
         decoder.stop();
         publish("stream ended");
         main.post(new Runnable() {

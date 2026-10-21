@@ -2,6 +2,57 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha5] — 2026-10-21
+
+Bluetooth bootstrap: how a phone finds the receiver. **Nothing here has run against a real phone or
+real Bluetooth hardware**; see "Not verified".
+
+### Added
+
+* **Bluetooth bootstrap** (`core/bt/WifiBootstrap`, pure Java): the head-unit side of wireless Android
+  Auto's RFCOMM exchange. The unit sends `WifiStartRequest {ip, port}`, answers the phone's
+  `WifiInfoRequest` with `WifiInfoResponse {ssid, key, bssid, security, ap type}`, then reads the phone's
+  last two messages. Service UUID `4de17a00-52cb-11e6-bdf4-0800200c9a66`, frame
+  `[size u16][id u16][protobuf]`. Details and sources: `docs/PROTOCOL.md` section 8.
+* **Android glue**: `BluetoothBootstrapServer` (RFCOMM server, 30 s watchdog, permission/adapter checks that
+  say what is wrong), `WifiConfigProvider` (own IPv4 address, SSID, BSSID), started and stopped with the
+  receiver. A receiver without Bluetooth still works; it just cannot be found by a phone.
+* **Settings > Wi-Fi for the phone**: SSID and password to hand to the phone. Android will not reveal the
+  password of the network the unit is on, so it is typed once; it is stored unencrypted in the app's private
+  preferences. With no SSID set, the Wi-Fi details are not sent.
+* Permissions: `BLUETOOTH_CONNECT` (Android 12+, requested with the notification permission),
+  `BLUETOOTH`/`BLUETOOTH_ADMIN` (up to Android 11), `ACCESS_FINE_LOCATION` (only to read the access point's
+  BSSID). Starting the receiver proceeds whatever the answers.
+* 14 new tests (115 total).
+
+### Fixed
+
+* **A slow first launch could bury the projection screen.** On a freshly booted, slow device the splash
+  screen's delayed hop to Home landed after the phone had started streaming and covered `ProjectionActivity`,
+  so nothing rendered. This is the "first run after a fresh boot" failure that had been reported as
+  unexplained since 0.2.0-alpha3. The splash now does not open Home while a phone is streaming.
+
+### Verified
+
+* JVM: 115 tests. Mutation checks on the new code: wrong field number for `security_mode` (1 test fails),
+  size field counting the header (7 fail), sending Wi-Fi details with no SSID (1 fails).
+* Emulator (API 34, XL VM), fresh boot + first run, which is the slow case: the same build failed on 2 of 3
+  fresh boots before the fix and passed 3 of 3 after it; in one of those the log shows the new
+  "a phone is already streaming; not opening Home" line and the projection screen displaying. Warm runs: 6 of 6,
+  every screenshot shows the test pattern. Small samples.
+* On the emulator the Bluetooth service reports `bluetooth: bootstrap unavailable: ...` and the receiver is
+  otherwise unaffected.
+
+### Not verified (and likely to matter)
+
+* **The RFCOMM service has never run on real hardware**, and no phone has ever connected to it.
+* **The phone may never connect.** The reference dongle this was modelled on also advertises the UUID over BLE
+  and connects a headset profile to the phone; AiPlay only listens. Whether that is enough is unknown
+  (`docs/PROTOCOL.md` 8.2).
+* The whole design rests on one reference implementation (aasdk/OpenAuto do not cover this exchange), and the
+  content of the phone's last two messages is unknown.
+* The self-signed head-unit certificate question (2.4) is still open.
+
 ## [0.2.0-alpha4] — 2026-10-21
 
 The transport rework. Reading aasdk's sources for it showed that AiPlay's wire format was still wrong

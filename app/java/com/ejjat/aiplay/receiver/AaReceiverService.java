@@ -30,6 +30,7 @@ public final class AaReceiverService extends Service {
 
     private AaServer server;
     private MdnsAdvertiser advertiser;
+    private BluetoothBootstrapServer bluetooth;
 
     public static boolean isRunning() {
         return RUNNING.get();
@@ -93,7 +94,7 @@ public final class AaReceiverService extends Service {
             server.start();
             RUNNING.set(true);
         } catch (Exception error) {
-            Diag.log("receiver", "TLS endpoint failed to start", error);
+            Diag.log("receiver", "receiver failed to start", error);
             RUNNING.set(false);
             stopSelf();
             return;
@@ -103,9 +104,18 @@ public final class AaReceiverService extends Service {
                 (Build.MODEL + Build.DEVICE).hashCode() & 0xFFFF);
         advertiser = new MdnsAdvertiser(this, name, port);
         advertiser.start();
+
+        // Optional: without Bluetooth the receiver still works for a client that already knows
+        // its address (the test rig). It just cannot be found by a phone.
+        bluetooth = new BluetoothBootstrapServer(this);
+        bluetooth.start();
     }
 
     private void stopEndpoint() {
+        if (bluetooth != null) {
+            bluetooth.stop();
+            bluetooth = null;
+        }
         if (advertiser != null) {
             advertiser.stop();
             advertiser = null;

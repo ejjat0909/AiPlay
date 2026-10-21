@@ -246,11 +246,71 @@ The mutation checks that guard this are in the 0.2.0-alpha4 changelog entry.
 
 | Channel | Needs |
 | --- | --- |
-| Bluetooth bootstrap | wireless AA: the phone learns the head unit's Wi-Fi address and port over Bluetooth (RFCOMM). Without it a phone never connects to AiPlay's port. Unverified in detail |
+| BLE advertisement + headset profile | what the dongle does besides listening on RFCOMM (section 8.2); may be needed to make a phone connect |
 | Media audio | `AVChannelSetup` + `AudioTrack` 48 kHz stereo, ack cadence |
 | Speech audio | second `AudioTrack`, ducking |
 | Input | `TouchEventData` (absolute, normalised) → `MotionEvent`, `ButtonEventsData` |
 | Sensor | `SensorChannel` start request, day/night + driving status |
+
+## 8. Bluetooth bootstrap (wireless Android Auto) — 0.2.0-alpha5
+
+A phone does not scan the LAN for a head unit. It learns where to connect over **Bluetooth**: the
+head unit exposes an RFCOMM service, the phone connects, and they exchange a few small messages
+that name the TCP address and the Wi-Fi network. Implemented in `core/bt/WifiBootstrap.java`
+(pure Java, tested) and `receiver/BluetoothBootstrapServer.java` (Android RFCOMM glue, **not run on
+hardware**).
+
+```
+head unit (RFCOMM server)                    phone
+   │── WifiStartRequest  {ip, port} ───────────▶│   id 1: where the head unit's TCP server is
+   │◀──────────────────── WifiInfoRequest ──────│   id 2
+   │── WifiInfoResponse  {ssid,key,bssid,…} ───▶│   id 3: which Wi-Fi network to join
+   │◀── two more messages (ids 4–7) ───────────│   read and logged, not answered
+   │      … the phone joins the Wi-Fi and opens TCP to ip:port; section 2.2 takes over …
+```
+
+* Service UUID `4de17a00-52cb-11e6-bdf4-0800200c9a66`, the head unit as RFCOMM **server**.
+* Frame `[payload size u16 BE][message id u16 BE][protobuf]`; the size excludes the 4 header bytes.
+* ids: `WifiStartRequest 1, WifiInfoRequest 2, WifiInfoResponse 3, WifiVersionRequest 4,
+  WifiVersionResponse 5, WifiConnectStatus 6, WifiStartResponse 7`.
+
+```proto
+message WifiStartRequest  { required string ip_address = 1; required int32 port = 2; }
+message WifiInfoResponse  { required string ssid = 1; required string key = 2; required string bssid = 3;
+                            required SecurityMode security_mode = 4;     // OPEN 1, WPA2_PERSONAL 8, WPA_WPA2_PERSONAL 12 …
+                            required AccessPointType access_point_type = 5; }  // STATIC 0, DYNAMIC 1
+```
+
+All fields are `required` (proto2), so zero values (`STATIC = 0`) are still written.
+
+### 8.1 How well-founded this is
+
+**Weaker than the aasdk-based sections.** aasdk and OpenAuto do not implement this exchange (OpenAuto's
+`AndroidBluetoothServer` only accepts the connection). Everything above comes from **one** project,
+nisargjhaveri/WirelessAndroidAutoDongle (`bluetoothProfiles.cpp`, `bluetoothHandler.cpp`,
+`proto/WifiStartRequest.proto`, `proto/WifiInfoResponse.proto`), which is a working head-unit stand-in,
+so the sequence is believable, but it was read, not independently confirmed, and the dongle simply reads
+(and ignores) the last two messages, so their content is unknown to AiPlay.
+
+### 8.2 What is not implemented, and why a phone may still not connect
+
+The dongle does more than listen. It also **advertises the UUID over BLE** and, outside dongle mode,
+**connects a headset (HSP) profile to the phone**, which appears to be what makes the phone's Android Auto
+open the RFCOMM connection. AiPlay does neither: it only listens. Whether a paired Android unit's ordinary
+Bluetooth link is enough to trigger the phone is **unknown**. The phone must also already be paired with
+the unit. These are the first things to check if the phone never connects: Diagnostics shows `bluetooth:`
+lines for each step, and "phone connected" is the first sign of progress.
+
+### 8.3 What the unit tells the phone
+
+* **IP and port**: the unit's own Wi-Fi/Ethernet IPv4 address and the receiver port.
+* **SSID and password**: from Settings > Wi-Fi for the phone. Android does not let an app read the
+  password of the network it is on, so it is entered once. It is stored in the app's private
+  preferences, **not encrypted**, and sent to any phone that connects to AiPlay's Bluetooth service
+  (the phone must be paired with the unit, which is the only gate). With no SSID configured the details
+  are not sent at all.
+* **BSSID**: the current access point's address when Android reveals it (needs the location permission);
+  otherwise empty. Whether the phone needs it is unknown.
 
 ## 7. Honesty boundary
 

@@ -3,6 +3,16 @@
     <string name="app_name">AiPlay</string>
     <string name="probing">Checking this unit…</string>
 
+    <!-- Wi-Fi for the phone (Bluetooth bootstrap) -->
+    <string name="settings_wifi_title">Wi-Fi for the phone</string>
+    <string name="settings_wifi_unset">Wi-Fi for the phone: not set (tap to set)</string>
+    <string name="settings_wifi">Wi-Fi for the phone: %1$s (%2$s)</string>
+    <string name="settings_wifi_open">open</string>
+    <string name="settings_wifi_protected">password set</string>
+    <string name="settings_wifi_ssid_hint">Network name (SSID)</string>
+    <string name="settings_wifi_key_hint">Password (empty for an open network)</string>
+    <string name="settings_wifi_hint">The phone is told over Bluetooth to join this network and then connect to this unit. The password is stored on this device, unencrypted, and sent only to a phone that connects to AiPlay\'s Bluetooth service.</string>
+
     <!-- Projection -->
     <string name="projection_waiting">Waiting for the phone\'s video…</string>
     <string name="projection_ended">The phone stopped projecting</string>
