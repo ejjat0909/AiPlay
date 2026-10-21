@@ -1,22 +1,40 @@
 #!/usr/bin/env python3
 """
-AiPlay receiver probe — talk Android Auto to a phone or head unit running AiPlay.
+AiPlay receiver probe — speak real Android Auto to a head unit running AiPlay.
 
-This is the client side of the handshake described in docs/PROTOCOL.md. It connects over TLS,
-performs the AA control exchange, and prints every frame in both directions, so you can prove the
-receiver works without a car:
+This is the client (phone) side of docs/PROTOCOL.md: TLS, then the control exchange, then a
+channel open for whichever channel the head unit advertises. It prints every message in both
+directions, so the receiver can be proven without a car:
 
     python3 tools/aa-probe.py 192.168.1.50
     python3 tools/aa-probe.py 192.168.1.50 --port 5277 --verbose
 
-Exit code 0 means the receiver completed version negotiation and service discovery.
-No third-party packages: standard library only.
+Exit code 0 means the receiver completed version negotiation, service discovery and the channel
+open it was asked to perform. Standard library only.
+
+Wire format (aasdk): [channel u8][flags u8][size u16 BE][payload], with a six-byte size field
+(size u16 + total u32) on the FIRST frame of a split message, and the message id as the first two
+bytes of the payload.
 """
 import argparse
 import socket
 import ssl
 import struct
 import sys
+
+# ---- channels, flags, message ids -----------------------------------------------------------
+
+CONTROL, INPUT, SENSOR, VIDEO, MEDIA_AUDIO, SPEECH_AUDIO, SYSTEM_AUDIO, AV_INPUT, BLUETOOTH = range(9)
+CHANNEL_NAMES = {
+    CONTROL: "control", INPUT: "input", SENSOR: "sensor", VIDEO: "video",
+    MEDIA_AUDIO: "media-audio", SPEECH_AUDIO: "speech-audio", SYSTEM_AUDIO: "system-audio",
+    AV_INPUT: "av-input", BLUETOOTH: "bluetooth",
+}
+
+FRAME_MIDDLE, FRAME_FIRST, FRAME_LAST, FRAME_BULK = 0, 1, 2, 3
+FLAG_ENCRYPTED = 1 << 3
+FLAG_CONTROL = 1 << 2
+MAX_FRAME_PAYLOAD = 0x4000
 
 VERSION_REQUEST = 0x0001
 VERSION_RESPONSE = 0x0002
@@ -30,7 +48,7 @@ PING_RESPONSE = 0x000C
 SHUTDOWN_REQUEST = 0x000F
 SHUTDOWN_RESPONSE = 0x0010
 
-NAMES = {
+MESSAGE_NAMES = {
     VERSION_REQUEST: "VERSION_REQUEST", VERSION_RESPONSE: "VERSION_RESPONSE",
     AUTH_COMPLETE: "AUTH_COMPLETE", SERVICE_DISCOVERY_REQUEST: "SERVICE_DISCOVERY_REQUEST",
     SERVICE_DISCOVERY_RESPONSE: "SERVICE_DISCOVERY_RESPONSE",
@@ -40,11 +58,13 @@ NAMES = {
 }
 
 
-def name_of(msg_type):
-    return NAMES.get(msg_type, "UNKNOWN_0x%04X" % msg_type)
+def message_name(channel, control, message_id):
+    if control:
+        return MESSAGE_NAMES.get(message_id, "UNKNOWN_0x%04X" % message_id)
+    return "0x%04X" % message_id
 
 
-# ---- protobuf (just enough) ----------------------------------------------------------------
+# ---- protobuf (just enough) -----------------------------------------------------------------
 
 def varint(value):
     out = bytearray()
@@ -103,10 +123,26 @@ def parse_fields(data):
         yield field, wire, value
 
 
-# ---- framing -------------------------------------------------------------------------------
+# ---- framing --------------------------------------------------------------------------------
 
-def send_frame(sock, msg_type, payload=b""):
-    sock.sendall(struct.pack(">HH", len(payload), msg_type) + payload)
+def encode_message(channel, control, message_id, payload=b""):
+    message = struct.pack(">H", message_id) + payload
+    flags_base = FLAG_CONTROL if control else 0
+    if len(message) <= MAX_FRAME_PAYLOAD:
+        return struct.pack(">BBH", channel, flags_base | FRAME_BULK, len(message)) + message
+    out = bytearray()
+    offset = 0
+    while offset < len(message):
+        size = min(MAX_FRAME_PAYLOAD, len(message) - offset)
+        first = offset == 0
+        last = offset + size >= len(message)
+        frame_type = FRAME_FIRST if first else (FRAME_LAST if last else FRAME_MIDDLE)
+        out += struct.pack(">BBH", channel, flags_base | frame_type, size)
+        if first:
+            out += struct.pack(">I", len(message))
+        out += message[offset:offset + size]
+        offset += size
+    return bytes(out)
 
 
 def recv_exact(sock, count):
@@ -121,38 +157,83 @@ def recv_exact(sock, count):
     return b"".join(chunks)
 
 
-def recv_frame(sock):
-    header = recv_exact(sock, 4)
-    length, msg_type = struct.unpack(">HH", header)
-    payload = recv_exact(sock, length) if length else b""
-    return msg_type, payload
+def recv_message(sock):
+    """Reads one reassembled message: (channel, control, message_id, payload)."""
+    buffer = b""
+    total = None
+    channel = control = 0
+    while True:
+        header = recv_exact(sock, 2)
+        channel, flags = header[0], header[1]
+        if flags & FLAG_ENCRYPTED:
+            raise ValueError("peer sent an encrypted frame; not supported")
+        frame_type = flags & FRAME_BULK
+        control = bool(flags & FLAG_CONTROL)
+        if frame_type == FRAME_FIRST:
+            size, total_size = struct.unpack(">HI", recv_exact(sock, 6))
+            total = total_size
+        else:
+            size = struct.unpack(">H", recv_exact(sock, 2))[0]
+            if frame_type != FRAME_BULK and total is None:
+                raise ValueError("continuation frame without a FIRST frame")
+        buffer += recv_exact(sock, size) if size else b""
+        if frame_type in (FRAME_BULK, FRAME_LAST):
+            if total is not None and len(buffer) != total:
+                raise ValueError("message size mismatch: got %d, expected %d"
+                                 % (len(buffer), total))
+            break
+    if len(buffer) < 2:
+        raise ValueError("message shorter than a message id")
+    message_id = struct.unpack(">H", buffer[:2])[0]
+    return channel, control, message_id, buffer[2:]
 
 
-def describe(msg_type, payload):
-    """One-line human summary of a control message."""
+# ---- decoding -------------------------------------------------------------------------------
+
+def parse_channels(payload):
+    """ServiceDiscoveryResponse -> [(channel_id, kind, stream_type or None)]."""
+    channels = []
+    for field, wire, value in parse_fields(payload):
+        if field != 1 or wire != 2:
+            continue
+        channel_id, kind, stream_type = 0, "unknown", None
+        for sub_field, sub_wire, sub_value in parse_fields(value):
+            if sub_field == 1 and sub_wire == 0:
+                channel_id = sub_value
+            elif sub_wire == 2 and sub_field in (2, 3, 4, 5, 6, 8, 12):
+                kind = {2: "sensor", 3: "av", 4: "input", 5: "av-input", 6: "bluetooth",
+                        8: "navigation", 12: "vendor"}[sub_field]
+                if sub_field == 3:
+                    for av_field, av_wire, av_value in parse_fields(sub_value):
+                        if av_field == 1 and av_wire == 0:
+                            stream_type = av_value
+        channels.append((channel_id, kind, stream_type))
+    return channels
+
+
+def describe(channel, control, message_id, payload):
     fields = list(parse_fields(payload)) if payload else []
-    if msg_type == VERSION_RESPONSE:
+    if control and message_id == VERSION_RESPONSE:
         values = {f: v for f, w, v in fields}
-        return "version %s.%s status=%s" % (
-            values.get(1, "?"), values.get(2, "?"), values.get(3, "?"))
-    if msg_type == SERVICE_DISCOVERY_RESPONSE:
-        channels = [v for f, w, v in fields if f == 1]
+        return "version %s.%s status=%s" % (values.get(1, "?"), values.get(2, "?"),
+                                            values.get(3, "?"))
+    if control and message_id == SERVICE_DISCOVERY_RESPONSE:
         text = {f: v.decode("utf-8", "replace") for f, w, v in fields if w == 2 and f != 1}
+        channels = parse_channels(payload)
         return "%d channel(s), head unit=%r, model=%r, sw=%r" % (
             len(channels), text.get(2, ""), text.get(3, ""), text.get(10, ""))
-    if msg_type == CHANNEL_OPEN_RESPONSE:
+    if control and message_id == CHANNEL_OPEN_RESPONSE:
         values = {f: v for f, w, v in fields}
-        return "status=%s (%s)" % (values.get(1, "?"),
-                                   "OK" if values.get(1) == 0 else "FAIL")
-    if msg_type == AUTH_COMPLETE:
+        return "status=%s (%s)" % (values.get(1, "?"), "OK" if values.get(1) == 0 else "FAIL")
+    if control and message_id == AUTH_COMPLETE:
         values = {f: v for f, w, v in fields}
         return "status=%s" % values.get(1, "?")
     return "%d field(s), %d byte(s)" % (len(fields), len(payload))
 
 
-# ---- probe ---------------------------------------------------------------------------------
+# ---- probe ----------------------------------------------------------------------------------
 
-def probe(host, port, timeout, verbose, head_unit_name):
+def probe(host, port, timeout, verbose, device_name, open_channel):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -161,65 +242,76 @@ def probe(host, port, timeout, verbose, head_unit_name):
     raw.settimeout(timeout)
     sock = context.wrap_socket(raw)
     print("connected  : tls %s / %s" % (sock.version(), sock.cipher()[0]))
-    peer = sock.getpeercert()
-    if peer:
-        print("cert       : %s" % (peer.get("subject"),))
+
+    def send(channel, control, message_id, payload=b""):
+        sock.sendall(encode_message(channel, control, message_id, payload))
+        print("-> %-10s %-26s %d byte(s)"
+              % (CHANNEL_NAMES.get(channel, channel), message_name(channel, control, message_id),
+                 len(payload)))
+
+    def receive():
+        channel, control, message_id, payload = recv_message(sock)
+        print("<- %-10s %-26s %s"
+              % (CHANNEL_NAMES.get(channel, channel), message_name(channel, control, message_id),
+                 describe(channel, control, message_id, payload)))
+        return channel, control, message_id, payload
 
     ok = False
     try:
-        msg_type, payload = recv_frame(sock)
-        print("<- %-26s %s" % (name_of(msg_type), describe(msg_type, payload)))
-        if msg_type != VERSION_REQUEST:
-            print("unexpected first frame; expected VERSION_REQUEST")
+        channel, control, message_id, payload = receive()
+        if message_id != VERSION_REQUEST:
+            print("unexpected first message; expected VERSION_REQUEST on the control channel")
             return 1
 
-        send_frame(sock, VERSION_RESPONSE, pb_varint(1, 1) + pb_varint(2, 6) + pb_varint(3, 0))
-        print("-> %-26s version 1.6 status=0" % "VERSION_RESPONSE")
-
-        msg_type, payload = recv_frame(sock)
-        print("<- %-26s %s" % (name_of(msg_type), describe(msg_type, payload)))
-        if msg_type != AUTH_COMPLETE:
-            print("expected AUTH_COMPLETE after version response")
+        send(CONTROL, True, VERSION_RESPONSE,
+             pb_varint(1, 1) + pb_varint(2, 6) + pb_varint(3, 0))
+        channel, control, message_id, payload = receive()
+        if message_id != AUTH_COMPLETE:
+            print("expected AUTH_COMPLETE after the version response")
             return 1
 
-        send_frame(sock, SERVICE_DISCOVERY_REQUEST,
-                   pb_string(4, head_unit_name) + pb_string(5, "AiPlay probe"))
-        print("-> %-26s device=%r" % ("SERVICE_DISCOVERY_REQUEST", head_unit_name))
-
-        msg_type, payload = recv_frame(sock)
-        print("<- %-26s %s" % (name_of(msg_type), describe(msg_type, payload)))
-        if msg_type != SERVICE_DISCOVERY_RESPONSE:
+        send(CONTROL, True, SERVICE_DISCOVERY_REQUEST,
+             pb_string(4, device_name) + pb_string(5, "AiPlay probe"))
+        channel, control, message_id, payload = receive()
+        if message_id != SERVICE_DISCOVERY_RESPONSE:
             print("expected SERVICE_DISCOVERY_RESPONSE")
             return 1
-        if verbose:
-            for field, wire, value in parse_fields(payload):
-                if wire == 2 and field != 1:
-                    print("     field %-2d = %r" % (field, value.decode("utf-8", "replace")))
+
+        channels = parse_channels(payload)
+        for channel_id, kind, stream_type in channels:
+            extra = "" if stream_type is None else " stream_type=%d" % stream_type
+            print("     channel %-3d %-11s%s" % (channel_id, kind, extra))
         ok = True
 
-        send_frame(sock, PING_REQUEST, pb_varint(1, 1234567))
-        print("-> %-26s timestamp=1234567" % "PING_REQUEST")
-        msg_type, payload = recv_frame(sock)
-        print("<- %-26s %s" % (name_of(msg_type), describe(msg_type, payload)))
+        send(CONTROL, True, PING_REQUEST, pb_varint(1, 1234567))
+        receive()
 
-        send_frame(sock, CHANNEL_OPEN_REQUEST, pb_varint(1, 1) + pb_varint(2, 1))
-        print("-> %-26s channel 1 priority 1" % "CHANNEL_OPEN_REQUEST")
-        msg_type, payload = recv_frame(sock)
-        print("<- %-26s %s" % (name_of(msg_type), describe(msg_type, payload)))
-        if msg_type == CHANNEL_OPEN_RESPONSE and payload and payload[1] == 1:
-            print("note       : receiver refused the channel — expected in 0.1.0 "
-                  "(no video/audio channel yet)")
+        target = open_channel
+        if target is None:
+            video = [c for c, kind, st in channels if kind == "av" and st == 3]
+            target = video[0] if video else (channels[0][0] if channels else None)
+        if target is None:
+            print("     head unit advertised no channels to open")
+        else:
+            send(CONTROL, True, CHANNEL_OPEN_REQUEST, pb_varint(1, 1) + pb_varint(2, target))
+            channel, control, message_id, payload = receive()
+            if message_id == CHANNEL_OPEN_RESPONSE:
+                values = {f: v for f, w, v in parse_fields(payload)}
+                if values.get(1) == 0:
+                    print("     channel %d opened" % target)
+                else:
+                    print("     receiver refused channel %d (status %s) — expected until the "
+                          "video channel lands" % (target, values.get(1)))
     finally:
         try:
-            send_frame(sock, SHUTDOWN_REQUEST)
-            print("-> %-26s" % "SHUTDOWN_REQUEST")
+            send(CONTROL, True, SHUTDOWN_REQUEST)
         except OSError:
             pass
         sock.close()
 
     print()
-    print("RESULT: %s" % ("handshake complete — receiver is speaking Android Auto" if ok
-                          else "handshake incomplete"))
+    print("RESULT: %s" % ("handshake complete — receiver speaks Android Auto"
+                          if ok else "handshake incomplete"))
     return 0 if ok else 1
 
 
@@ -229,10 +321,12 @@ def main():
     parser.add_argument("--port", type=int, default=5277)
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--name", default="AiPlay probe", help="device name sent to the receiver")
+    parser.add_argument("--channel", type=int, default=None,
+                        help="channel id to open (default: first video channel)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     try:
-        return probe(args.host, args.port, args.timeout, args.verbose, args.name)
+        return probe(args.host, args.port, args.timeout, args.verbose, args.name, args.channel)
     except (OSError, EOFError, ValueError) as error:
         print("FAILED: %s" % error)
         print("check: same Wi-Fi network, receiver started in the app, port %d not blocked"

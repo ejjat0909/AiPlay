@@ -2,6 +2,32 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.1.3] — 2026-10-21
+
+**The framing was wrong.** Found while building the test rig for the video channel.
+
+### Fixed
+
+* **Wire format rewritten to the real Android Auto framing.** 0.1.0–0.1.2 wrote
+  `[size u16][message id u16][protobuf]`. The aasdk definition is
+  `[channel u8][flags u8][size u16 BE][payload]`, with the message id as the first two bytes of
+  the payload, `FIRST/MIDDLE/LAST` split frames above `0x4000` bytes, and an extended
+  `size + total` field on the FIRST frame. The old format was self-consistent, so the probe
+  completed a "handshake" against it — no real phone would have. New `AaChannel` (channel ids,
+  flags, `MAX_FRAME_PAYLOAD`) and `AaFrame` (channel, control, message id, payload); codec
+  splits and reassembles; encrypted frames are rejected explicitly.
+* **`tools/aa-probe.py` rewritten** to the same format and now parses the channel descriptors
+  out of service discovery and opens the video channel, so it reports *which* stage a receiver
+  fails at instead of a single boolean.
+* **`AaSession` speaks per-channel messages** and logs channel + id, so a channel-specific
+  message is never mistaken for a control message.
+
+### Changed
+
+* 62 JVM tests (was 58), including hand-computed wire vectors and split-message reassembly.
+* `docs/PROTOCOL.md` §2–§3 rewritten with the corrected format, citations and an explicit
+  correction note.
+
 ## [0.1.2] — 2026-10-21
 
 Second device pass. 0.1.1 fixed the verdict; this release fixes what the report *said* about

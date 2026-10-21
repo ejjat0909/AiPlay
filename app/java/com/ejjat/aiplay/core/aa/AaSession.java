@@ -13,9 +13,12 @@ import java.util.List;
  * streams here, which means the whole handshake can be exercised by a desktop JVM test over a real
  * TLS connection.</p>
  *
- * <p>Implemented in 0.1.0: version negotiation, auth complete, service discovery, channel open
- * responses, ping and shutdown. Video, audio and input channels are not implemented — the session
- * says so in its event log instead of silently dropping frames.</p>
+ * <p>Implemented: version negotiation, auth complete, service discovery, channel open responses,
+ * ping and shutdown. Video, audio and input channels are not implemented — the session says so in
+ * its event log instead of silently dropping messages.</p>
+ *
+ * <p>Wire format: see {@link AaFrameCodec}. Every message carries a channel id and a flags byte
+ * before its size; the message id is the first two bytes of the message payload.</p>
  */
 public final class AaSession {
 
@@ -24,7 +27,7 @@ public final class AaSession {
         void onEvent(String message);
     }
 
-    private static final int MAX_PAYLOAD = AaFrameCodec.MAX_PAYLOAD;
+    private static final int MAX_MESSAGE = AaFrameCodec.MAX_MESSAGE_PAYLOAD;
 
     private final InputStream input;
     private final OutputStream output;
@@ -49,7 +52,7 @@ public final class AaSession {
             return;
         }
         versionSent = true;
-        send(AaMessageType.VERSION_REQUEST, AaControl.versionRequest());
+        sendControl(AaMessageType.VERSION_REQUEST, AaControl.versionRequest());
     }
 
     /**
@@ -71,55 +74,66 @@ public final class AaSession {
         return pending.size();
     }
 
-    /** Processes one frame and writes any replies. Exposed for tests. */
+    /** Processes one message and writes any replies. Exposed for tests. */
     public void handle(AaFrame frame) throws IOException {
-        switch (frame.type) {
+        if (!frame.control) {
+            event("message " + frame + " on " + AaChannel.name(frame.channel)
+                    + " — no channel handler in 0.1.x");
+            return;
+        }
+        switch (frame.messageId) {
             case AaMessageType.VERSION_RESPONSE: {
                 AaControl.VersionResponse response = AaControl.parseVersionResponse(frame.payload);
                 event("peer version " + response);
-                send(AaMessageType.AUTH_COMPLETE, AaControl.authComplete(AaControl.STATUS_OK));
+                sendControl(AaMessageType.AUTH_COMPLETE, AaControl.authComplete(AaControl.STATUS_OK));
                 break;
             }
             case AaMessageType.SERVICE_DISCOVERY_REQUEST: {
                 AaControl.ServiceDiscoveryRequest request =
                         AaControl.parseServiceDiscoveryRequest(frame.payload);
                 event("service discovery from " + request.deviceBrand + " " + request.deviceName);
-                send(AaMessageType.SERVICE_DISCOVERY_RESPONSE,
+                sendControl(AaMessageType.SERVICE_DISCOVERY_RESPONSE,
                         AaControl.serviceDiscoveryResponse(discovery));
                 break;
             }
             case AaMessageType.CHANNEL_OPEN_REQUEST: {
                 event("channel open request (" + frame.payload.length + "B)");
-                send(AaMessageType.CHANNEL_OPEN_RESPONSE,
+                sendControl(AaMessageType.CHANNEL_OPEN_RESPONSE,
                         AaControl.channelOpenResponse(AaControl.STATUS_FAIL));
                 break;
             }
             case AaMessageType.PING_REQUEST: {
                 event("ping");
-                send(AaMessageType.PING_RESPONSE,
+                sendControl(AaMessageType.PING_RESPONSE,
                         AaControl.pingResponse(System.nanoTime() / 1000L));
                 break;
             }
             case AaMessageType.SHUTDOWN_REQUEST: {
                 event("peer requested shutdown");
-                send(AaMessageType.SHUTDOWN_RESPONSE, new byte[0]);
+                sendControl(AaMessageType.SHUTDOWN_RESPONSE, new byte[0]);
                 break;
             }
             default: {
-                event("frame " + frame.typeName() + " (" + frame.payload.length
-                        + "B) — not handled in 0.1.0");
+                event("message " + frame + " — not handled in 0.1.x");
                 break;
             }
         }
     }
 
-    private void send(int type, byte[] payload) throws IOException {
-        if (payload.length > MAX_PAYLOAD) {
-            throw new IOException("reply too large: " + payload.length);
+    private void sendControl(int messageId, byte[] payload) throws IOException {
+        send(AaChannel.CONTROL, true, messageId, payload);
+    }
+
+    /** Writes one message on the wire, splitting it into frames when it is large. */
+    public void send(int channel, boolean control, int messageId, byte[] payload) throws IOException {
+        if (payload.length + 2 > MAX_MESSAGE) {
+            throw new IOException("message too large: " + payload.length);
         }
-        output.write(AaFrameCodec.encode(type, payload));
+        output.write(AaFrameCodec.encode(channel, control, messageId, payload));
         output.flush();
-        event("sent " + AaMessageType.name(type) + " (" + payload.length + "B)");
+        event("sent " + AaChannel.name(channel) + "/"
+                + (control ? AaMessageType.name(messageId) : String.format("0x%04X", messageId))
+                + " (" + payload.length + "B)");
     }
 
     private void event(String message) {

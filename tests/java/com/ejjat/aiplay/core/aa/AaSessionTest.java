@@ -52,7 +52,7 @@ public class AaSessionTest {
         session.begin(); // idempotent
 
         AaFrame frame = readFrame(new ByteArrayInputStream(out.toByteArray()));
-        assertEquals(AaMessageType.VERSION_REQUEST, frame.type);
+        assertEquals(AaMessageType.VERSION_REQUEST, frame.messageId);
         assertTrue(events.size() >= 1);
     }
 
@@ -63,16 +63,16 @@ public class AaSessionTest {
         AaSession session = new AaSession(new ByteArrayInputStream(new byte[0]), out,
                 sink(events), discovery());
 
-        session.handle(new AaFrame(AaMessageType.VERSION_RESPONSE,
+        session.handle(AaFrame.control(AaMessageType.VERSION_RESPONSE,
                 new byte[]{0x08, 0x01, 0x10, 0x06, 0x18, 0x00}));
-        session.handle(new AaFrame(AaMessageType.SERVICE_DISCOVERY_REQUEST,
+        session.handle(AaFrame.control(AaMessageType.SERVICE_DISCOVERY_REQUEST,
                 new ProtoWriter().string(4, "Pixel").string(5, "Google").toByteArray()));
 
         InputStream replies = new ByteArrayInputStream(out.toByteArray());
         AaFrame auth = readFrame(replies);
         AaFrame discoveryReply = readFrame(replies);
-        assertEquals(AaMessageType.AUTH_COMPLETE, auth.type);
-        assertEquals(AaMessageType.SERVICE_DISCOVERY_RESPONSE, discoveryReply.type);
+        assertEquals(AaMessageType.AUTH_COMPLETE, auth.messageId);
+        assertEquals(AaMessageType.SERVICE_DISCOVERY_RESPONSE, discoveryReply.messageId);
         assertTrue(discoveryReply.payload.length > 0);
         assertTrue(events.toString().contains("Pixel"));
     }
@@ -82,11 +82,11 @@ public class AaSessionTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         AaSession session = new AaSession(new ByteArrayInputStream(new byte[0]), out,
                 sink(new ArrayList<String>()), discovery());
-        session.handle(new AaFrame(AaMessageType.CHANNEL_OPEN_REQUEST,
+        session.handle(AaFrame.control(AaMessageType.CHANNEL_OPEN_REQUEST,
                 new ProtoWriter().varint(1, 1).varint(2, 1).toByteArray()));
 
         AaFrame reply = readFrame(new ByteArrayInputStream(out.toByteArray()));
-        assertEquals(AaMessageType.CHANNEL_OPEN_RESPONSE, reply.type);
+        assertEquals(AaMessageType.CHANNEL_OPEN_RESPONSE, reply.messageId);
         assertEquals(0x08, reply.payload[0]);
         assertEquals(AaControl.STATUS_FAIL, reply.payload[1]);
     }
@@ -96,9 +96,9 @@ public class AaSessionTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         AaSession session = new AaSession(new ByteArrayInputStream(new byte[0]), out,
                 sink(new ArrayList<String>()), discovery());
-        session.handle(new AaFrame(AaMessageType.PING_REQUEST, AaControl.pingRequest(1L)));
+        session.handle(AaFrame.control(AaMessageType.PING_REQUEST, AaControl.pingRequest(1L)));
         assertEquals(AaMessageType.PING_RESPONSE,
-                readFrame(new ByteArrayInputStream(out.toByteArray())).type);
+                readFrame(new ByteArrayInputStream(out.toByteArray())).messageId);
     }
 
     @Test
@@ -107,7 +107,7 @@ public class AaSessionTest {
         List<String> events = new ArrayList<String>();
         AaSession session = new AaSession(new ByteArrayInputStream(new byte[0]), out,
                 sink(events), discovery());
-        session.handle(new AaFrame(0x00AA, new byte[]{1, 2, 3}));
+        session.handle(AaFrame.control(0x00AA, new byte[]{1, 2, 3}));
         assertTrue(events.toString().contains("UNKNOWN_0x00AA"));
         assertEquals(0, out.size());
     }
@@ -172,23 +172,23 @@ public class AaSessionTest {
             OutputStream out = client.getOutputStream();
 
             AaFrame versionRequest = readFrame(in);
-            assertEquals(AaMessageType.VERSION_REQUEST, versionRequest.type);
+            assertEquals(AaMessageType.VERSION_REQUEST, versionRequest.messageId);
 
-            out.write(AaFrameCodec.encode(AaMessageType.VERSION_RESPONSE,
+            out.write(AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.VERSION_RESPONSE,
                     new byte[]{0x08, 0x01, 0x10, 0x06, 0x18, 0x00}));
             out.flush();
-            assertEquals(AaMessageType.AUTH_COMPLETE, readFrame(in).type);
+            assertEquals(AaMessageType.AUTH_COMPLETE, readFrame(in).messageId);
 
-            out.write(AaFrameCodec.encode(AaMessageType.SERVICE_DISCOVERY_REQUEST,
+            out.write(AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.SERVICE_DISCOVERY_REQUEST,
                     new ProtoWriter().string(4, "TestPhone").toByteArray()));
             out.flush();
             AaFrame discoveryReply = readFrame(in);
-            assertEquals(AaMessageType.SERVICE_DISCOVERY_RESPONSE, discoveryReply.type);
+            assertEquals(AaMessageType.SERVICE_DISCOVERY_RESPONSE, discoveryReply.messageId);
             assertTrue(discoveryReply.payload.length > 4);
 
-            out.write(AaFrameCodec.encode(AaMessageType.PING_REQUEST, AaControl.pingRequest(7L)));
+            out.write(AaFrameCodec.encode(AaChannel.CONTROL, true, AaMessageType.PING_REQUEST, AaControl.pingRequest(7L)));
             out.flush();
-            assertEquals(AaMessageType.PING_RESPONSE, readFrame(in).type);
+            assertEquals(AaMessageType.PING_RESPONSE, readFrame(in).messageId);
         } finally {
             closeQuietly(client);
             closeQuietly(serverSocket);
@@ -202,7 +202,7 @@ public class AaSessionTest {
         String events = serverEvents.toString();
         assertNotNull(events);
         assertTrue("server should announce its version: " + events,
-                events.contains("sent VERSION_REQUEST"));
+                events.contains("sent control/VERSION_REQUEST"));
         assertTrue("server should record the peer's discovery: " + events,
                 events.contains("service discovery from"));
     }
@@ -219,26 +219,41 @@ public class AaSessionTest {
     }
 
     private static AaFrame readFrame(InputStream in) throws IOException, AaProtocolException {
-        byte[] header = new byte[4];
+        byte[] header = new byte[AaFrameCodec.HEADER_SIZE + AaFrameCodec.SIZE_EXTENDED];
+        if (!readFully(in, header, AaFrameCodec.HEADER_SIZE + AaFrameCodec.SIZE_SHORT)) {
+            throw new IOException("stream ended before a frame header");
+        }
+        boolean first = (header[1] & AaChannel.FRAME_BULK) == AaChannel.FRAME_FIRST;
+        int headerBytes = AaFrameCodec.HEADER_SIZE
+                + (first ? AaFrameCodec.SIZE_EXTENDED : AaFrameCodec.SIZE_SHORT);
+        if (first && !readFully(in, header, headerBytes, AaFrameCodec.HEADER_SIZE
+                + AaFrameCodec.SIZE_SHORT)) {
+            throw new IOException("stream ended inside an extended size field");
+        }
+        int size = ((header[2] & 0xFF) << 8) | (header[3] & 0xFF);
+        byte[] wire = new byte[headerBytes + size];
+        System.arraycopy(header, 0, wire, 0, headerBytes);
+        if (!readFully(in, wire, headerBytes + size, headerBytes)) {
+            throw new IOException("stream ended inside a frame");
+        }
+        return AaFrameCodec.decode(wire);
+    }
+
+    private static boolean readFully(InputStream in, byte[] buffer, int count) throws IOException {
+        return readFully(in, buffer, count, 0);
+    }
+
+    private static boolean readFully(InputStream in, byte[] buffer, int count, int offset)
+            throws IOException {
         int read = 0;
-        while (read < 4) {
-            int n = in.read(header, read, 4 - read);
+        while (read < count - offset) {
+            int n = in.read(buffer, offset + read, count - offset - read);
             if (n < 0) {
-                throw new IOException("stream ended before a frame header");
+                return false;
             }
             read += n;
         }
-        int length = ((header[0] & 0xFF) << 8) | (header[1] & 0xFF);
-        byte[] payload = new byte[length];
-        int payloadRead = 0;
-        while (payloadRead < length) {
-            int n = in.read(payload, payloadRead, length - payloadRead);
-            if (n < 0) {
-                throw new IOException("stream ended inside a frame");
-            }
-            payloadRead += n;
-        }
-        return new AaFrame(((header[2] & 0xFF) << 8) | (header[3] & 0xFF), payload);
+        return true;
     }
 
     private static SSLContext serverContext(String path) throws Exception {

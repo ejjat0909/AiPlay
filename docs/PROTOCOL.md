@@ -15,22 +15,51 @@ Discovery is mDNS (`_androidauto._tcp`). USB accessory mode (AOA) is a 0.3.0 tra
 
 ```
  offset  size  field
- 0       2     payload length, big endian, uint16 (max 65535)
- 2       2     message type, big endian, uint16
- 4       n     payload: protobuf
+ 0       1     channel id            (ChannelId.hpp: control=0, input=1, sensor=2, video=3,
+                                     media audio=4, speech audio=5, system audio=6,
+                                     av input=7, bluetooth=8)
+ 1       1     flags                 frame type | ENCRYPTED (8) | CONTROL (4)
+ 2       2     size, big endian      payload bytes in this frame (SHORT form)
+ 2       6     size + total, BE      FIRST frame of a split message: size u16, total u32
+ then    n     payload
 ```
 
-Implementation: `core/aa/AaFrameCodec.java`. Tests: `AaFrameCodecTest` (vectors,
-byte-at-a-time fragmentation, trailing partial frame, payload cap, bounds).
+Frame type is `MIDDLE=0`, `FIRST=1`, `LAST=2`, `BULK=FIRST|LAST=3`. A message that fits in
+`cMaxFramePayloadSize = 0x4000` bytes travels as one `BULK` frame; anything larger is split
+into `FIRST` (which carries the extended size), zero or more `MIDDLE`, then `LAST`.
 
-Because the length field is 16-bit, a peer cannot make the head unit allocate more than
-64 KiB per frame; the parser also holds only received bytes, never the declared length.
+The **message payload begins with the message id**, two bytes big endian, followed by the
+protobuf:
+
+```
+ message payload = [message id u16 BE][protobuf]
+```
+
+Implementation: `core/aa/AaFrameCodec.java`, `core/aa/AaChannel.java`, `core/aa/AaFrame.java`.
+Tests: `AaFrameCodecTest` (hand-computed vectors, split/reassembly, byte-at-a-time
+fragmentation, encrypted-frame rejection, continuation-without-FIRST, bounds, unfulfilled
+declaration).
+
+Citations: aasdk `src/Messenger/MessageOutStream.cpp` (header written first, then the size),
+`FrameHeader.cpp`, `FrameSize.cpp`, `MessageId.cpp`, `ChannelId.hpp`, `FrameType.hpp`,
+`EncryptionType.hpp`, `MessageType.hpp`.
+
+### 2.1 Correction: 0.1.0–0.1.2 framing was wrong
+
+Until 0.1.3 AiPlay wrote `[size u16][message id u16][protobuf]` — no channel id, no flags,
+no split support, and the message id in the header instead of the payload. That format is
+self-consistent, which is why `tools/aa-probe.py` reported "handshake complete" against it,
+but **no real Android Auto phone speaks it**: a phone's first control frame
+`[channel=0][flags=0x07][size][message id]…` would have been read as a 0x0007 message with the
+message id inside the protobuf. Every "handshake complete" before 0.1.3 was AiPlay talking to
+AiPlay. The 0.1.3 codec follows the aasdk format above, and the probe was rewritten to match,
+so the loopback test now exercises the real contract.
 
 ## 3. Message identifiers (verified)
 
-Taken from `aasdk_proto/ControlMessageIdsEnum.proto` (f1xpl/aasdk, GPL-3.0):
+Control-channel ids, from `aasdk_proto/ControlMessageIdsEnum.proto` (f1xpl/aasdk, GPL-3.0):
 
-| Id | Name | 0.1.0 behaviour |
+| Id | Name | behaviour |
 | --- | --- | --- |
 | `0x0001` | `VERSION_REQUEST` | **sent** on session start |
 | `0x0002` | `VERSION_RESPONSE` | parsed → `AUTH_COMPLETE` |
@@ -38,11 +67,18 @@ Taken from `aasdk_proto/ControlMessageIdsEnum.proto` (f1xpl/aasdk, GPL-3.0):
 | `0x0004` | `AUTH_COMPLETE` | **sent** with `status = OK` |
 | `0x0005` | `SERVICE_DISCOVERY_REQUEST` | parsed, logged |
 | `0x0006` | `SERVICE_DISCOVERY_RESPONSE` | **sent** with channel descriptors |
-| `0x0007` | `CHANNEL_OPEN_REQUEST` | logged, answered `FAIL` |
+| `0x0007` | `CHANNEL_OPEN_REQUEST` | parsed; answered `FAIL` until a channel exists |
 | `0x0008` | `CHANNEL_OPEN_RESPONSE` | **sent** |
 | `0x000b`/`0x000c` | `PING_REQUEST` / `PING_RESPONSE` | answered |
 | `0x000f`/`0x0010` | `SHUTDOWN_REQUEST` / `RESPONSE` | acknowledged |
 | `0x000d`…`0x0013` | navigation focus, voice, audio focus | logged, not answered |
+
+Channel-scoped ids live in `AVChannelMessageIdsEnum.proto` and are **not** control ids: on the
+video/audio channels `SETUP_REQUEST = 0x8000`, `START_INDICATION = 0x8001`,
+`STOP_INDICATION = 0x8002`, `SETUP_RESPONSE = 0x8003`, `AV_MEDIA_ACK_INDICATION = 0x8004`,
+`AV_INPUT_OPEN_REQUEST = 0x8005`, `AV_INPUT_OPEN_RESPONSE = 0x8006`,
+`VIDEO_FOCUS_REQUEST = 0x8007`, `VIDEO_FOCUS_INDICATION = 0x8008`, and media payloads arrive
+with `AV_MEDIA_WITH_TIMESTAMP_INDICATION = 0x0000` / `AV_MEDIA_INDICATION = 0x0001`.
 
 ## 4. Message layouts (verified field numbers)
 

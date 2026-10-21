@@ -56,7 +56,7 @@ no release key: a keystore in a public repository is not a secret.
 ```
 
 Generates a throwaway TLS keystore with `keytool`, compiles `core/` and `tests/` against
-the plain JDK, and runs 58 JUnit 4 tests. No Android SDK required beyond the JDK.
+the plain JDK, and runs 62 JUnit 4 tests. No Android SDK required beyond the JDK.
 
 ## 5. Icons
 
