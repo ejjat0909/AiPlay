@@ -2,6 +2,32 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha3] - 2026-10-21
+
+Found by the user on an API 34 emulator (`c2.goldfish.h264.decoder`): the decoder started, took 15 of
+90 pictures, dropped the other 75 and never rendered. Reproduced on an API 34 x86_64 emulator
+(0-4 pictures fed, no picture).
+
+### Fixed
+
+* **A slow decoder lost the whole stream.** `VideoDecoder` waited 20 ms for an input buffer; on a miss
+  it dropped the picture and then discarded everything until the next keyframe, so one short stall
+  became a permanent one (and a phone sends keyframes rarely). It now waits up to 1.5 s, draining the
+  decoder's output while it waits, and only then resyncs. Because the ack is sent after the picture is
+  handed over, a slow decoder now slows the phone down instead of being flooded.
+* **Pictures that arrived before the screen existed were thrown away.** The projection screen can take
+  seconds to appear on a slow unit. Pictures since the last keyframe are now buffered (up to 120 pictures
+  / 8 MB) and replayed, off the UI thread, when the surface attaches.
+* The stop line reports input stalls (`decoder stopped: 90 fed, 0 dropped, 13 input stall(s)`), so a slow
+  decoder is visible in the log.
+
+### Verified
+
+* API 34 x86_64 emulator on a Large VM, swap-starved: with the old code 0-4 pictures were fed. With this
+  change two of three runs rendered, one of them with 90 fed / 0 dropped. The third run did not render:
+  the log was overwritten before it could be read, so the cause is not confirmed (the projection screen
+  opened after the clip ended is the likely reason, and was seen once before this change).
+
 ## [0.2.0-alpha2] — 2026-10-21
 
 First run on a real Android runtime (API 30 emulator on a Large VM). Two bugs that only a device could

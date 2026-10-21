@@ -9,6 +9,8 @@ import com.ejjat.aiplay.core.aa.H264;
 import com.ejjat.aiplay.device.Diag;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * H.264 (Annex-B) to {@link Surface} through {@link MediaCodec}.
@@ -34,7 +36,17 @@ final class VideoDecoder {
     private static final String MIME = "video/avc";
     private static final int WIDTH = 1280;
     private static final int HEIGHT = 720;
-    private static final long INPUT_TIMEOUT_US = 20000L;
+    /** One poll of the codec's input queue; between polls the output is drained. */
+    private static final long INPUT_POLL_US = 10000L;
+    /**
+     * How long to wait for the codec to accept a picture before giving up on it. A slow decoder
+     * (an emulator, a cheap head-unit SoC) must be allowed to fall behind: blocking here delays
+     * the ack, which is exactly how the phone is told to slow down.
+     */
+    private static final long INPUT_WAIT_MS = 1500L;
+    /** Pictures kept since the last keyframe while there is no surface or codec yet. */
+    private static final int PENDING_MAX_PICTURES = 120;
+    private static final int PENDING_MAX_BYTES = 8 * 1024 * 1024;
     private static final long SYNTHETIC_FRAME_US = 33333L;
 
     private final Object lock = new Object();
@@ -49,6 +61,22 @@ final class VideoDecoder {
     private long synthetic;
     private long fed;
     private long dropped;
+    private long stalls;
+    private final List<Picture> pending = new ArrayList<Picture>();
+    private int pendingBytes;
+
+    /** A picture held back until a decoder can take it. */
+    private static final class Picture {
+        final long timestamp;
+        final byte[] data;
+        final boolean keyframe;
+
+        Picture(long timestamp, byte[] data, boolean keyframe) {
+            this.timestamp = timestamp;
+            this.data = data;
+            this.keyframe = keyframe;
+        }
+    }
 
     VideoDecoder(Listener listener) {
         this.listener = listener;
@@ -65,14 +93,32 @@ final class VideoDecoder {
             waitForKeyframe = true;
             firstFrameReported = false;
         }
+        if (newSurface != null) {
+            // The phone may already be streaming (the screen takes a moment to come up). Replay
+            // what was buffered instead of waiting for the next keyframe, which a phone sends
+            // rarely. Off the UI thread: starting a codec can take hundreds of milliseconds.
+            Thread replay = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    synchronized (lock) {
+                        flushPending();
+                    }
+                }
+            }, "aiplay-video-replay");
+            replay.start();
+        }
     }
 
     /** The phone stopped streaming: free the codec but keep the surface. */
     void stop() {
         synchronized (lock) {
             if (fed > 0 || dropped > 0) {
-                Diag.log("video", "decoder stopped: " + fed + " fed, " + dropped + " dropped");
+                Diag.log("video", "decoder stopped: " + fed + " fed, " + dropped + " dropped, "
+                        + stalls + " input stall(s)");
             }
+            pending.clear();
+            pendingBytes = 0;
+            stalls = 0;
             releaseCodec();
             config = null;
             waitForKeyframe = true;
@@ -92,34 +138,80 @@ final class VideoDecoder {
                 config = new byte[prefix];
                 System.arraycopy(data, offset, config, 0, prefix);
             }
-            if (surface == null || failed) {
-                dropped++;
-                return;
-            }
-            if (codec == null && !startCodec()) {
-                dropped++;
-                return;
-            }
-            if (waitForKeyframe) {
-                if (!H264.hasIdr(mask)) {
-                    dropped++;
-                    return;
-                }
-                waitForKeyframe = false;
-            }
             long ts = timestampMicros >= 0 ? timestampMicros : synthetic * SYNTHETIC_FRAME_US;
             synthetic++;
-            try {
-                if (!queue(data, offset, length, ts, 0)) {
-                    dropped++;
-                    waitForKeyframe = true; // a dropped P frame corrupts everything after it
-                } else {
-                    fed++;
-                }
-                drain();
-            } catch (RuntimeException error) {
-                fail("decoder error: " + error);
+            byte[] copy = new byte[length];
+            System.arraycopy(data, offset, copy, 0, length);
+            Picture picture = new Picture(ts, copy, H264.hasIdr(mask));
+
+            if (surface == null || failed) {
+                hold(picture);
+                return;
             }
+            flushPending();
+            submit(picture);
+        }
+    }
+
+    /** Keeps pictures from the latest keyframe on, so a late decoder can still start cleanly. */
+    private void hold(Picture picture) {
+        if (picture.keyframe) {
+            pending.clear();
+            pendingBytes = 0;
+        } else if (pending.isEmpty()) {
+            dropped++; // nothing to decode it against
+            return;
+        }
+        if (pending.size() >= PENDING_MAX_PICTURES
+                || pendingBytes + picture.data.length > PENDING_MAX_BYTES) {
+            pending.clear();
+            pendingBytes = 0;
+            dropped++;
+            return;
+        }
+        pending.add(picture);
+        pendingBytes += picture.data.length;
+    }
+
+    /** Feeds everything buffered, oldest first. Caller holds the lock. */
+    private void flushPending() {
+        if (surface == null || failed || pending.isEmpty()) {
+            return;
+        }
+        List<Picture> batch = new ArrayList<Picture>(pending);
+        pending.clear();
+        pendingBytes = 0;
+        Diag.log("video", "replaying " + batch.size() + " buffered picture(s)");
+        for (int i = 0; i < batch.size(); i++) {
+            submit(batch.get(i));
+        }
+    }
+
+    /** Sends one picture to the codec, starting it if needed. Caller holds the lock. */
+    private void submit(Picture picture) {
+        if (codec == null && !startCodec()) {
+            dropped++;
+            return;
+        }
+        if (waitForKeyframe) {
+            if (!picture.keyframe) {
+                dropped++;
+                return;
+            }
+            waitForKeyframe = false;
+        }
+        try {
+            if (!queue(picture.data, 0, picture.data.length, picture.timestamp, 0)) {
+                dropped++;
+                waitForKeyframe = true; // a dropped P frame corrupts everything after it
+                Diag.log("video", "decoder did not accept a picture within " + INPUT_WAIT_MS
+                        + " ms; resyncing at the next keyframe");
+            } else {
+                fed++;
+            }
+            drain();
+        } catch (RuntimeException error) {
+            fail("decoder error: " + error);
         }
     }
 
@@ -168,9 +260,20 @@ final class VideoDecoder {
     }
 
     private boolean queue(byte[] data, int offset, int length, long ts, int flags) {
-        int index = codec.dequeueInputBuffer(INPUT_TIMEOUT_US);
-        if (index < 0) {
-            return false;
+        long deadline = System.nanoTime() + INPUT_WAIT_MS * 1000000L;
+        int index = codec.dequeueInputBuffer(INPUT_POLL_US);
+        boolean stalled = false;
+        while (index < 0) {
+            if (!stalled) {
+                stalled = true;
+                stalls++;
+            }
+            // The codec is full because nobody has taken its output yet: take it, then retry.
+            drain();
+            if (System.nanoTime() > deadline) {
+                return false;
+            }
+            index = codec.dequeueInputBuffer(INPUT_POLL_US);
         }
         ByteBuffer buffer = codec.getInputBuffer(index);
         if (buffer == null || buffer.capacity() < length) {
