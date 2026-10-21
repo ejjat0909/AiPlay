@@ -1,0 +1,232 @@
+package com.ejjat.aiplay.core.aa;
+
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class AaControlTest {
+
+    @Test
+    public void versionRequestMatchesWireVector() {
+        assertArrayEquals(new byte[]{0x08, 0x01, 0x10, 0x06}, AaControl.versionRequest());
+    }
+
+    @Test
+    public void authCompleteCarriesStatus() {
+        assertArrayEquals(new byte[]{0x08, 0x00}, AaControl.authComplete(AaControl.STATUS_OK));
+        assertArrayEquals(new byte[]{0x08, 0x01}, AaControl.authComplete(AaControl.STATUS_FAIL));
+    }
+
+    @Test
+    public void pingRoundTrips() throws Exception {
+        byte[] payload = AaControl.pingRequest(1234567L);
+        ProtoReader reader = new ProtoReader(payload);
+        int tag = reader.readTag();
+        assertEquals(1, ProtoReader.field(tag));
+        assertEquals(1234567L, reader.readVarint());
+        assertFalse(reader.hasMore());
+    }
+
+    @Test
+    public void channelOpenResponseIsStatusOnly() {
+        assertArrayEquals(new byte[]{0x08, 0x00}, AaControl.channelOpenResponse(AaControl.STATUS_OK));
+    }
+
+    @Test
+    public void serviceDiscoveryAdvertisesFourChannels() throws Exception {
+        AaControl.ServiceDiscoveryConfig config = new AaControl.ServiceDiscoveryConfig();
+        config.headUnitName = "AiPlay-Test";
+        config.carModel = "Proton X50";
+        config.videoWidth = 1280;
+        config.videoHeight = 720;
+        config.videoFps = 30;
+
+        byte[] payload = AaControl.serviceDiscoveryResponse(config);
+
+        List<byte[]> channels = new ArrayList<byte[]>();
+        ProtoReader reader = new ProtoReader(payload);
+        String headUnitName = null;
+        boolean leftHandDrive = false;
+        while (reader.hasMore()) {
+            int tag = reader.readTag();
+            switch (ProtoReader.field(tag)) {
+                case 1:
+                    channels.add(reader.readBytes());
+                    break;
+                case 2:
+                    headUnitName = reader.readString();
+                    break;
+                case 3:
+                    assertEquals("Proton X50", reader.readString());
+                    break;
+                case 6:
+                    leftHandDrive = reader.readVarint() == 1;
+                    break;
+                default:
+                    reader.skip(ProtoReader.wireType(tag));
+                    break;
+            }
+        }
+
+        assertEquals("AiPlay-Test", headUnitName);
+        assertTrue(leftHandDrive);
+        assertEquals(4, channels.size());
+
+        // Channel 1: video. channel_id = 1, av_channel.stream_type = VIDEO(3), video_configs[0].
+        ProtoReader video = new ProtoReader(channels.get(0));
+        int channelId = -1;
+        int streamType = -1;
+        int resolution = -1;
+        int fps = -1;
+        int dpi = -1;
+        while (video.hasMore()) {
+            int tag = video.readTag();
+            switch (ProtoReader.field(tag)) {
+                case 1:
+                    channelId = (int) video.readVarint();
+                    break;
+                case 3:
+                    ProtoReader av = new ProtoReader(video.readBytes());
+                    while (av.hasMore()) {
+                        int avTag = av.readTag();
+                        if (ProtoReader.field(avTag) == 1) {
+                            streamType = (int) av.readVarint();
+                        } else if (ProtoReader.field(avTag) == 4) {
+                            ProtoReader vc = new ProtoReader(av.readBytes());
+                            while (vc.hasMore()) {
+                                int vcTag = vc.readTag();
+                                switch (ProtoReader.field(vcTag)) {
+                                    case 1:
+                                        resolution = (int) vc.readVarint();
+                                        break;
+                                    case 2:
+                                        fps = (int) vc.readVarint();
+                                        break;
+                                    case 5:
+                                        dpi = (int) vc.readVarint();
+                                        break;
+                                    default:
+                                        vc.skip(ProtoReader.wireType(vcTag));
+                                        break;
+                                }
+                            }
+                        } else {
+                            av.skip(ProtoReader.wireType(avTag));
+                        }
+                    }
+                    break;
+                default:
+                    video.skip(ProtoReader.wireType(tag));
+                    break;
+            }
+        }
+        assertEquals(1, channelId);
+        assertEquals(AaControl.STREAM_VIDEO, streamType);
+        assertEquals(2, resolution); // 720p
+        assertEquals(1, fps);        // 30
+        assertEquals(160, dpi);
+
+        // Channel 2: media audio. audio_type = MEDIA(3), audio_config 48000/16/2.
+        ProtoReader media = new ProtoReader(channels.get(1));
+        int mediaType = -1;
+        int sampleRate = -1;
+        int channelCount = -1;
+        while (media.hasMore()) {
+            int tag = media.readTag();
+            if (ProtoReader.field(tag) == 3) {
+                ProtoReader av = new ProtoReader(media.readBytes());
+                while (av.hasMore()) {
+                    int avTag = av.readTag();
+                    switch (ProtoReader.field(avTag)) {
+                        case 2:
+                            mediaType = (int) av.readVarint();
+                            break;
+                        case 3:
+                            ProtoReader ac = new ProtoReader(av.readBytes());
+                            while (ac.hasMore()) {
+                                int acTag = ac.readTag();
+                                if (ProtoReader.field(acTag) == 1) {
+                                    sampleRate = (int) ac.readVarint();
+                                } else if (ProtoReader.field(acTag) == 3) {
+                                    channelCount = (int) ac.readVarint();
+                                } else {
+                                    ac.skip(ProtoReader.wireType(acTag));
+                                }
+                            }
+                            break;
+                        default:
+                            av.skip(ProtoReader.wireType(avTag));
+                            break;
+                    }
+                }
+            } else {
+                media.skip(ProtoReader.wireType(tag));
+            }
+        }
+        assertEquals(AaControl.AUDIO_MEDIA, mediaType);
+        assertEquals(48000, sampleRate);
+        assertEquals(2, channelCount);
+
+        // Channel 4: input. touch config width/height present.
+        ProtoReader input = new ProtoReader(channels.get(3));
+        int touchWidth = -1;
+        while (input.hasMore()) {
+            int tag = input.readTag();
+            if (ProtoReader.field(tag) == 4) {
+                ProtoReader ic = new ProtoReader(input.readBytes());
+                while (ic.hasMore()) {
+                    int icTag = ic.readTag();
+                    if (ProtoReader.field(icTag) == 2) {
+                        ProtoReader tc = new ProtoReader(ic.readBytes());
+                        while (tc.hasMore()) {
+                            int tcTag = tc.readTag();
+                            if (ProtoReader.field(tcTag) == 1) {
+                                touchWidth = (int) tc.readVarint();
+                            } else {
+                                tc.skip(ProtoReader.wireType(tcTag));
+                            }
+                        }
+                    } else {
+                        ic.skip(ProtoReader.wireType(icTag));
+                    }
+                }
+            } else {
+                input.skip(ProtoReader.wireType(tag));
+            }
+        }
+        assertEquals(1280, touchWidth);
+    }
+
+    @Test
+    public void parsesVersionResponse() {
+        AaControl.VersionResponse response =
+                AaControl.parseVersionResponse(new byte[]{0x08, 0x01, 0x10, 0x06, 0x18, 0x00});
+        assertTrue(response.complete);
+        assertEquals(1, response.major);
+        assertEquals(6, response.minor);
+        assertEquals(0, response.status);
+    }
+
+    @Test
+    public void toleratesGarbageVersionResponse() {
+        AaControl.VersionResponse response = AaControl.parseVersionResponse(new byte[]{(byte) 0x80});
+        assertFalse(response.complete);
+    }
+
+    @Test
+    public void parsesServiceDiscoveryRequest() {
+        byte[] payload = new ProtoWriter()
+                .string(4, "Pixel 8")
+                .string(5, "Google")
+                .toByteArray();
+        AaControl.ServiceDiscoveryRequest request = AaControl.parseServiceDiscoveryRequest(payload);
+        assertEquals("Pixel 8", request.deviceName);
+        assertEquals("Google", request.deviceBrand);
+    }
+}

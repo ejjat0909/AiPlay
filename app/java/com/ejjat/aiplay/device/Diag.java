@@ -1,0 +1,150 @@
+package com.ejjat.aiplay.device;
+
+import android.content.Context;
+import android.os.Build;
+
+import com.ejjat.aiplay.BuildConfig;
+import com.ejjat.aiplay.core.Capability;
+import com.ejjat.aiplay.core.DeviceProfile;
+import com.ejjat.aiplay.core.Verdict;
+
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
+import java.util.Date;
+import java.util.Deque;
+import java.util.Locale;
+
+/**
+ * Bounded diagnostic log plus report builder.
+ *
+ * <p>Never records SSIDs, passwords, phone names or MAC addresses: reports are meant to be pasted
+ * into a public issue.</p>
+ */
+public final class Diag {
+
+    private static final int MAX_LINES = 512;
+    private static final Deque<String> LINES = new ArrayDeque<String>(MAX_LINES);
+    private static final SimpleDateFormat TIME =
+            new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
+
+    private Diag() {
+    }
+
+    public static void log(String area, String message) {
+        String line = TIME.format(new Date()) + " " + area + ": " + message;
+        synchronized (LINES) {
+            if (LINES.size() >= MAX_LINES) {
+                LINES.removeFirst();
+            }
+            LINES.addLast(line);
+        }
+        if (Prefs.showSplash() || BuildConfig.VERSION_CODE > 0) {
+            android.util.Log.d("AiPlay", line);
+        }
+    }
+
+    public static void log(String area, String message, Throwable error) {
+        StringWriter writer = new StringWriter();
+        error.printStackTrace(new PrintWriter(writer));
+        log(area, message + " — " + error.getClass().getSimpleName() + ": " + error.getMessage());
+        synchronized (LINES) {
+            String[] frames = writer.toString().split("\n");
+            for (int i = 0; i < Math.min(frames.length, 12); i++) {
+                if (LINES.size() >= MAX_LINES) {
+                    LINES.removeFirst();
+                }
+                LINES.addLast("    " + frames[i].trim());
+            }
+        }
+    }
+
+    public static String dump() {
+        StringBuilder builder = new StringBuilder();
+        synchronized (LINES) {
+            for (String line : LINES) {
+                builder.append(line).append('\n');
+            }
+        }
+        return builder.toString();
+    }
+
+    public static int size() {
+        synchronized (LINES) {
+            return LINES.size();
+        }
+    }
+
+    public static String report(Context context, DeviceProfile profile, Verdict verdict) {
+        StringBuilder out = new StringBuilder(4096);
+        out.append("AiPlay diagnostic report\n");
+        out.append("========================\n\n");
+        out.append("app version : ").append(BuildConfig.VERSION_NAME)
+                .append(" (").append(BuildConfig.VERSION_CODE).append(")\n");
+        out.append("generated   : ").append(new Date().toString()).append('\n');
+        out.append("package     : ").append(context.getPackageName()).append("\n\n");
+
+        out.append("device\n------\n");
+        out.append("manufacturer: ").append(Build.MANUFACTURER).append('\n');
+        out.append("brand       : ").append(Build.BRAND).append('\n');
+        out.append("model       : ").append(Build.MODEL).append('\n');
+        out.append("device      : ").append(Build.DEVICE).append('\n');
+        out.append("android     : ").append(Build.VERSION.RELEASE)
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
+        out.append("fingerprint : ").append(Build.FINGERPRINT).append('\n');
+        out.append("display     : ").append(Build.DISPLAY).append("\n\n");
+
+        if (profile != null) {
+            out.append("audit\n-----\n");
+            out.append("summary     : ").append(profile.describe()).append('\n');
+            out.append("gearhead    : installed=").append(profile.gearheadInstalled)
+                    .append(" enabled=").append(profile.gearheadEnabled)
+                    .append(" launcher=").append(profile.gearheadHasLauncher)
+                    .append(" version=").append(profile.gearheadVersionName).append('\n');
+            out.append("play services: installed=").append(profile.gmsInstalled)
+                    .append(" enabled=").append(profile.gmsEnabled).append('\n');
+            out.append("root        : ").append(profile.suAvailable)
+                    .append(" (").append(profile.suDetail).append(")\n");
+            out.append("shizuku     : ").append(profile.shizukuInstalled).append('\n');
+            out.append("adb         : usb=").append(profile.adbEnabled)
+                    .append(" wireless=").append(profile.adbWifiEnabled).append('\n');
+            out.append("usb host    : ").append(profile.usbHost).append('\n');
+            out.append("wifi direct : ").append(profile.wifiDirect).append('\n');
+            out.append("receiver    : port ").append(profile.receiverPort)
+                    .append(" free=").append(profile.receiverPortFree).append("\n\n");
+        }
+
+        if (verdict != null) {
+            out.append("verdict\n-------\n");
+            out.append("condition   : ").append(verdict.condition.code)
+                    .append(" (").append(verdict.condition.key).append(")\n");
+            out.append("action      : ").append(verdict.action).append('\n');
+            out.append("score       : ").append(verdict.score).append('\n');
+            out.append("rationale   : ").append(verdict.rationaleKey).append('\n');
+            for (Capability capability : verdict.capabilities) {
+                out.append("  - ").append(capability.id).append(": ").append(capability.state)
+                        .append(" (").append(capability.evidence).append(")\n");
+            }
+            out.append('\n');
+        }
+
+        out.append("log (").append(size()).append(" lines)\n---------------\n");
+        out.append(dump());
+        out.append("\nend of report\n");
+        return out.toString();
+    }
+
+    public static void installCrashHandler() {
+        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread thread, Throwable error) {
+                log("crash", "uncaught on " + thread.getName(), error);
+                if (previous != null) {
+                    previous.uncaughtException(thread, error);
+                }
+            }
+        });
+    }
+}

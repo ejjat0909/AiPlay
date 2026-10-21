@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.AiPlay" parent="android:Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#0A1020</item>
+        <item name="android:colorAccent">#22D3EE</item>
+        <item name="android:statusBarColor">#05070D</item>
+        <item name="android:navigationBarColor">#05070D</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+
+    <style name="Theme.AiPlay.Splash" parent="Theme.AiPlay">
+        <item name="android:windowBackground">#05070D</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="31">#05070D</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>
