@@ -51,5 +51,5 @@ fi
 
 CLASSES=$(cd "$ROOT/tests/java" && find . -name '*Test.java' | sed 's|^\./||; s|\.java$||; s|/|.|g' | sort)
 echo "== running $(echo "$CLASSES" | wc -l | tr -d ' ') test classes =="
-java -Daiplay.test.keystore="$KEYSTORE" -cp "$BUILD/classes:$JUNIT:$HAMCREST" \
+java -Daiplay.test.keystore="$KEYSTORE" -Daiplay.test.identity="$ROOT/app/res/raw/receiver_identity.p12" -cp "$BUILD/classes:$JUNIT:$HAMCREST" \
   org.junit.runner.JUnitCore $CLASSES

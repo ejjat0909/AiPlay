@@ -124,24 +124,47 @@ final class VideoDecoder {
     }
 
     private boolean startCodec() {
-        try {
-            MediaFormat format = MediaFormat.createVideoFormat(MIME, WIDTH, HEIGHT);
-            if (Build.VERSION.SDK_INT >= 30) {
-                format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+        // KEY_LOW_LATENCY is only a hint, but some decoders (the emulator's goldfish codec, and
+        // many cheap head-unit SoCs) reject it and then refuse to configure at all. Try it first,
+        // then retry without: a decoder that works slowly beats one that does not start.
+        Exception lastError = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            boolean lowLatency = attempt == 0 && Build.VERSION.SDK_INT >= 30;
+            if (attempt == 1 && Build.VERSION.SDK_INT < 30) {
+                break; // the first attempt already ran without the hint
             }
-            MediaCodec created = MediaCodec.createDecoderByType(MIME);
-            created.configure(format, surface, null, 0);
-            created.start();
-            codec = created;
-            Diag.log("video", "decoder started: " + created.getName());
-            if (config != null && config.length > 0) {
-                queue(config, 0, config.length, 0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG);
+            MediaCodec created = null;
+            try {
+                MediaFormat format = MediaFormat.createVideoFormat(MIME, WIDTH, HEIGHT);
+                if (lowLatency) {
+                    format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+                }
+                created = MediaCodec.createDecoderByType(MIME);
+                created.configure(format, surface, null, 0);
+                created.start();
+                codec = created;
+                Diag.log("video", "decoder started: " + created.getName()
+                        + (lowLatency ? " (low latency)" : ""));
+                if (config != null && config.length > 0) {
+                    queue(config, 0, config.length, 0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG);
+                }
+                return true;
+            } catch (Exception error) {
+                lastError = error;
+                codec = null;
+                if (created != null) {
+                    try {
+                        created.release();
+                    } catch (RuntimeException ignored) {
+                        // nothing useful to do
+                    }
+                }
+                Diag.log("video", "decoder start failed"
+                        + (lowLatency ? " with the low-latency hint" : "") + ": " + error);
             }
-            return true;
-        } catch (Exception error) {
-            fail("could not start an H.264 decoder: " + error);
-            return false;
         }
+        fail("could not start an H.264 decoder: " + lastError);
+        return false;
     }
 
     private boolean queue(byte[] data, int offset, int length, long ts, int flags) {

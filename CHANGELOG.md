@@ -2,6 +2,29 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha2] — 2026-10-21
+
+First run on a real Android runtime (API 30 emulator on a Large VM). Two bugs that only a device could
+show, both of which would have stopped a head unit.
+
+### Fixed
+
+* **The receiver did not start on Android 11 and older.** `receiver_identity.p12` had been written
+  with a current JDK's default PBES2 encryption, which Android before ~API 31 cannot read
+  (`SecretKeyFactory 1.2.840.113549.1.5.12 not available`). It is regenerated with the legacy
+  encryption, and `ReceiverIdentityTest` fails the build if PBES2 returns. API 34 had hidden this.
+* **The H.264 decoder did not start on decoders that reject `KEY_LOW_LATENCY`** (the emulator's
+  goldfish codec: `decoder can not set low-latency to 1 (err -1010)`; likely also some head-unit
+  SoCs). The hint is now tried first and retried without it.
+
+### Verified on a device
+
+* API 30 emulator (`sdk_gphone_x86_64`, software GPU): `tools/device-test.sh` exits 0 — receiver up,
+  90 of 90 pictures acked at 30 fps, `OMX.android.goldfish.h264.decoder` started, first 1280x720
+  picture rendered, and the mid-stream screenshot shows the decoded test pattern letterboxed 16:9.
+* Not yet: dropped pictures. On that emulator (memory-starved, running on swap) only 37 of 90 pictures
+  were decoded before input timeouts forced a resync to the next keyframe. Real hardware needs a look.
+
 ## [0.2.0-alpha1] — 2026-10-21
 
 First step of 0.2.0 (projection): the video channel. **Not yet usable with a real phone** — see
