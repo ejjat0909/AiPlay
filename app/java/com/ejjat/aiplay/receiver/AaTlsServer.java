@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 
@@ -121,7 +122,7 @@ public final class AaTlsServer {
                 Thread worker = new Thread(new Runnable() {
                     @Override
                     public void run() {
-                        handle(session);
+                        handle(session, id);
                     }
                 }, "aiplay-session-" + id);
                 worker.start();
@@ -134,11 +135,21 @@ public final class AaTlsServer {
         }
     }
 
-    private void handle(SSLSocket socket) {
+    private void handle(SSLSocket socket, int id) {
         try {
             socket.setSoTimeout(15000);
-            socket.startHandshake();
-            event("tls handshake ok, cipher " + socket.getSession().getCipherSuite());
+            try {
+                socket.startHandshake();
+            } catch (SSLException error) {
+                // Usually a bare TCP connect-and-close (a readiness check, a port scanner, adb
+                // forward with nothing behind it): no ClientHello, nothing to answer. Say that,
+                // but keep the real reason so a genuine TLS incompatibility is not hidden.
+                event("session " + id + ": TLS never completed (port probe or incompatible "
+                        + "client): " + error.getMessage());
+                return;
+            }
+            event("session " + id + ": tls handshake ok, cipher "
+                    + socket.getSession().getCipherSuite());
 
             AaControl.ServiceDiscoveryConfig discovery = new AaControl.ServiceDiscoveryConfig();
             discovery.headUnitName = "AiPlay";

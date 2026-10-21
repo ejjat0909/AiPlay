@@ -70,19 +70,23 @@ echo "== forward =="
 echo "laptop 127.0.0.1:$PORT -> device :$PORT"
 
 echo "== waiting for the receiver to listen =="
+# `adb forward` accepts the laptop-side connection even when nothing listens on the device, so a
+# bare TCP connect proves nothing (and shows up in the app log as a failed TLS session). Do a real
+# TLS handshake instead: it succeeds only when the receiver is up, and it ends cleanly.
 if ! python3 - "$PORT" <<'PYWAIT'
-import socket, sys, time
+import socket, ssl, sys, time
 port = int(sys.argv[1])
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
 for _ in range(40):
-    probe = socket.socket()
-    probe.settimeout(0.5)
     try:
-        probe.connect(("127.0.0.1", port))
+        raw = socket.create_connection(("127.0.0.1", port), timeout=2)
+        with ctx.wrap_socket(raw) as tls:
+            tls.getpeercert()
         sys.exit(0)
-    except OSError:
+    except (OSError, ssl.SSLError):
         time.sleep(0.5)
-    finally:
-        probe.close()
 sys.exit(1)
 PYWAIT
 then

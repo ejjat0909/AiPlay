@@ -2,6 +2,22 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.1.5] — 2026-10-21
+
+Clean-up from the first green emulator run (0.1.4 passed; two log lines looked wrong).
+
+### Fixed
+
+* **`SSLHandshakeException` from a "first session".** `device-test.sh` waited for the receiver by
+  opening a bare TCP connection. `adb forward` accepts that connection on the laptop whether or not
+  the device is listening (so the wait proved nothing), and the receiver then logged a failed TLS
+  session for it. The wait now does a real TLS handshake through the forward, and the receiver
+  logs a handshake that never completes as `session N: TLS never completed (port probe or
+  incompatible client): <reason>` instead of an unlabelled exception.
+* **`splash: watchdog fired` was unexplained.** The watchdog is the intended safety net for an
+  animation that never finishes (screen off or locked, animations disabled — common on a headless
+  emulator). It still fires; its log line now says why.
+
 ## [0.1.4] — 2026-10-21
 
 First run on an emulator (API 34, `sdk_gphone64_arm64`). The receiver worked; the script that

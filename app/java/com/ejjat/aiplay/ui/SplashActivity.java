@@ -73,7 +73,8 @@ public final class SplashActivity extends Activity {
             @Override
             public void run() {
                 if (!navigated) {
-                    Diag.log("splash", "watchdog fired");
+                    Diag.log("splash", "watchdog fired after " + WATCHDOG_MS + " ms: the animation never finished "
+                            + "(screen off or locked, or animations disabled); continuing to Home");
                     goHome();
                 }
             }
