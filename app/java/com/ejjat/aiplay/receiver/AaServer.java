@@ -142,6 +142,7 @@ public final class AaServer {
     }
 
     private void handle(Socket socket, int id) {
+        AaSession attached = null;
         try {
             socket.setSoTimeout(15000);
             socket.setTcpNoDelay(true);
@@ -152,14 +153,19 @@ public final class AaServer {
             discovery.videoWidth = 1280;
             discovery.videoHeight = 720;
 
-            AaSession session = new AaSession(socket.getInputStream(), socket.getOutputStream(),
+            final AaSession session = new AaSession(socket.getInputStream(), socket.getOutputStream(),
                     new AaSession.Sink() {
                         @Override
                         public void onEvent(String message) {
                             Diag.log("receiver", message);
                         }
                     }, discovery, new AaCryptor(tlsContext));
-            session.setVideoSink(ProjectionHub.get(context));
+            ProjectionHub hub = ProjectionHub.get(context);
+            session.setVideoSink(hub);
+            session.setAudioSink(hub);
+            session.setSensorSource(hub);
+            hub.attachSession(session);
+            attached = session;
             session.begin();
 
             byte[] buffer = new byte[65536];
@@ -174,6 +180,9 @@ public final class AaServer {
             event("session " + id + " ended: " + error.getClass().getSimpleName() + " "
                     + error.getMessage());
         } finally {
+            if (attached != null) {
+                ProjectionHub.get(context).detachSession(attached);
+            }
             closeQuietly(socket);
         }
     }

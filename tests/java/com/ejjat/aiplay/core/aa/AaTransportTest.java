@@ -322,4 +322,79 @@ public class AaTransportTest {
             fail("error should mention TLS: " + unit.failure.get().getMessage());
         }
     }
+
+    @Test
+    public void touchSentFromAnotherThreadWhileAcksFlowKeepsTheTlsStreamIntact() throws Exception {
+        // Touch is sent by the UI/input thread while the session thread writes media acks. Both
+        // encrypt on one TLS engine; without one lock around encrypt+write, records interleave or
+        // arrive out of order and the phone's decryption fails.
+        final int count = 400;
+        final HeadUnit unit = new HeadUnit();
+        FakePhone phone = new FakePhone(unit.port());
+        try {
+            phone.connect();
+            phone.send(AaChannel.INPUT, true, AaMessageType.CHANNEL_OPEN_REQUEST,
+                    new ProtoWriter().varint(2, AaChannel.INPUT).toByteArray());
+            assertEquals(AaMessageType.CHANNEL_OPEN_RESPONSE, phone.next().messageId);
+            phone.send(AaChannel.INPUT, false, AaInput.BINDING_REQUEST,
+                    new ProtoWriter().varint(1, AaInput.KEY_DPAD_UP).toByteArray());
+            AaFrame binding = phone.next();
+            assertEquals(AaInput.BINDING_RESPONSE, binding.messageId);
+            assertTrue(binding.encrypted);
+
+            phone.send(AaChannel.VIDEO, true, AaMessageType.CHANNEL_OPEN_REQUEST,
+                    new ProtoWriter().varint(2, AaChannel.VIDEO).toByteArray());
+            assertEquals(AaMessageType.CHANNEL_OPEN_RESPONSE, phone.next().messageId);
+            phone.send(AaChannel.VIDEO, false, AaAv.START_INDICATION,
+                    new ProtoWriter().varint(1, 1).toByteArray());
+
+            final AtomicReference<Throwable> touchFailure = new AtomicReference<Throwable>();
+            Thread touches = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        for (int n = 0; n < count; n++) {
+                            while (!unit.session.sendTouch(n, AaInput.DRAG, 0,
+                                    new int[]{n}, new int[]{n}, new int[]{0})) {
+                                Thread.sleep(1);
+                            }
+                        }
+                    } catch (Throwable error) {
+                        touchFailure.set(error);
+                    }
+                }
+            }, "test-touch-sender");
+            touches.start();
+            for (int n = 0; n < count; n++) {
+                phone.send(AaChannel.VIDEO, false, AaAv.MEDIA, new byte[]{0, 0, 0, 1, 0x41, (byte) n});
+            }
+
+            int acks = 0;
+            int touchEvents = 0;
+            int lastX = -1;
+            while (acks < count || touchEvents < count) {
+                AaFrame frame = phone.next();
+                assertTrue("every frame after TLS is encrypted: " + frame, frame.encrypted);
+                if (frame.messageId == AaAv.MEDIA_ACK) {
+                    acks++;
+                } else if (frame.channel == AaChannel.INPUT) {
+                    AaInput.Touch touch = AaInput.parseTouch(frame.payload);
+                    assertTrue("touch events must stay in order", touch.xs[0] > lastX);
+                    lastX = touch.xs[0];
+                    touchEvents++;
+                }
+            }
+            touches.join(5000);
+            assertEquals(null, touchFailure.get());
+            assertEquals(count, acks);
+            assertEquals(count, touchEvents);
+
+            phone.send(AaChannel.CONTROL, false, AaMessageType.SHUTDOWN_REQUEST, new byte[0]);
+            assertEquals(AaMessageType.SHUTDOWN_RESPONSE, phone.next().messageId);
+        } finally {
+            phone.close();
+        }
+        finish(unit);
+        assertEquals(count, unit.pictures.size());
+    }
 }

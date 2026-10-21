@@ -244,13 +244,13 @@ The mutation checks that guard this are in the 0.2.0-alpha4 changelog entry.
 
 ## 6. Not implemented
 
-| Channel | Needs |
+| Feature | Notes |
 | --- | --- |
 | BLE advertisement + headset profile | what the dongle does besides listening on RFCOMM (section 8.2); may be needed to make a phone connect |
-| Media audio | `AVChannelSetup` + `AudioTrack` 48 kHz stereo, ack cadence |
-| Speech audio | second `AudioTrack`, ducking |
-| Input | `TouchEventData` (absolute, normalised) → `MotionEvent`, `ButtonEventsData` |
-| Sensor | `SensorChannel` start request, day/night + driving status |
+| Microphone (`AV_INPUT`) | voice assistant through the head unit's mic |
+| Location sensor | not offered; OpenAuto leaves it out too |
+| Bluetooth channel (`BLUETOOTH`, 8) | pairing helper only |
+| Two-finger gestures | sent in the message shape, unverified against a phone |
 
 ## 8. Bluetooth bootstrap (wireless Android Auto) — 0.2.0-alpha5
 
@@ -311,6 +311,73 @@ lines for each step, and "phone connected" is the first sign of progress.
   are not sent at all.
 * **BSSID**: the current access point's address when Android reveals it (needs the location permission);
   otherwise empty. Whether the phone needs it is unknown.
+
+## 9. Input, sensor and audio (0.2.0-alpha6)
+
+All ids and fields below were read from aasdk, and behaviour checked against OpenAuto's
+`InputService.cpp`, `SensorService.cpp`, `AudioService.cpp`, `ServiceFactory.cpp` and
+`AndroidAutoEntity.cpp`. Like everything else here, none of it has met a real phone.
+
+### 9.1 Input flows head unit -> phone
+
+The head unit **captures** touches and keys on its own screen and **sends** them. The phone sends exactly
+one message on this channel, `BINDING_REQUEST` (`0x8002`, repeated `scan_codes = 1`), naming the keys it
+wants; the head unit answers `BINDING_RESPONSE` (`0x8003`, `status`, OK only if every code was advertised).
+After that the head unit sends `INPUT_EVENT_INDICATION` (`0x8001`):
+
+```proto
+message InputEventIndication { uint64 timestamp = 1;            // microseconds
+                               TouchEvent touch_event = 3; ButtonEvents button_event = 4; ... }
+message TouchEvent    { repeated TouchLocation touch_location = 1;   // every pointer
+                        uint32 action_index = 2; TouchAction touch_action = 3; }  // PRESS 0, RELEASE 1, DRAG 2
+message TouchLocation { uint32 x = 1; uint32 y = 2; uint32 pointer_id = 3; }
+message ButtonEvent   { uint32 scan_code = 1; bool is_pressed = 2; uint32 meta = 3; bool long_press = 4; }
+```
+
+* **Coordinates** are in the `TouchConfig` width x height sent in service discovery, which AiPlay sets to the
+  video resolution (1280x720). That the phone wants the *video's* coordinate space is the convention in
+  aasdk-based head units; the protobuf files do not say so.
+* **Letterboxing**: the video is centred 16:9 inside the screen, so a touch is mapped relative to the video
+  rectangle (`core/input/TouchMapper`), not the screen. A gesture that starts on a letterbox bar is not sent;
+  one that leaves the video is clamped to its edge. Verified on 1920x1080, 1024x600 and 1280x480 screens.
+* **Keys**: advertised `UP DOWN LEFT RIGHT ENTER` and `TOGGLE_PLAY NEXT PREV PLAY PAUSE` (Android key codes,
+  which equal aasdk's `ButtonCode`). **HOME and BACK are not advertised or forwarded**: on the head unit they
+  leave the projection screen. A key is advertised only if it is forwarded. Auto-repeat is not forwarded.
+* **Multi-touch** sends every pointer with the changed index as `action_index`, following the message shape.
+  OpenAuto only ever sends one pointer; two-finger gestures are **unverified**.
+* Touches are written from a dedicated thread (the UI thread may not use the network); surplus `DRAG` events are
+  dropped when the network falls behind, presses and releases never.
+
+### 9.2 Sensor channel
+
+The phone opens the channel and sends `SENSOR_START_REQUEST` (`0x8001`, `sensor_type = 1`) per sensor; the head
+unit answers `SENSOR_START_RESPONSE` (`0x8002`) and pushes `SENSOR_EVENT_INDICATION` (`0x8003`). AiPlay offers
+the two sensors OpenAuto offers: **driving status** (type 13, always `UNRESTRICTED`: the unit has no speed source)
+and **night mode** (type 10, from the head unit's own UI mode, pushed again whenever it changes). Location is not
+offered. Whether a given navigation app insists on more than this is unknown.
+
+### 9.3 Audio
+
+Audio travels on the AV channels exactly like video (open, setup, start, `MEDIA_WITH_TIMESTAMP`, one ack per
+message with `max_unacked = 1`, stop); the payload is 16-bit little-endian PCM:
+
+| Channel | id | format | `AudioStream` / usage |
+| --- | --- | --- | --- |
+| media | 4 | 48 kHz stereo | `USAGE_MEDIA` |
+| speech (navigation prompts, assistant) | 5 | 16 kHz mono | `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE` |
+| system sounds | 6 | 16 kHz mono | `USAGE_ASSISTANCE_SONIFICATION` |
+
+* **Focus** (control channel): `AUDIO_FOCUS_REQUEST` (`0x12`) is answered `GAIN`, or `LOSS` for a release;
+  `NAVIGATION_FOCUS_REQUEST` (`0x0d`) is answered type 2. Both exactly as OpenAuto does; aasdk defines finer
+  states (e.g. `GAIN_TRANSIENT_GUIDANCE_ONLY`) and which a phone prefers is unknown.
+* **Playback** never blocks the session thread: audio goes through a bounded queue (1.5 s; the *oldest* audio is
+  dropped on overflow) to a per-channel `AudioTrack` thread, so a slow audio device cannot stall video or input.
+  On stop the queued tail still plays.
+* **Ducking** is AiPlay's own design (OpenAuto does not do it): media drops to 25% while a speech or system
+  stream is active and returns afterwards. It relies on the phone starting and stopping those streams per
+  prompt, which is not confirmed for every phone and app.
+* **Not implemented**: the microphone (`AV_INPUT`, channel 7), so "OK Google" through the head unit's mic does
+  not work. AiPlay does not request Android audio focus on the head unit either.
 
 ## 7. Honesty boundary
 

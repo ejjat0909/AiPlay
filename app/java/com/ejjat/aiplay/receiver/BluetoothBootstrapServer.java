@@ -69,6 +69,7 @@ final class BluetoothBootstrapServer {
                     UUID.fromString(WifiBootstrap.SERVICE_UUID));
             Diag.log("bluetooth", "listening for the phone on RFCOMM service "
                     + WifiBootstrap.SERVICE_UUID + " (adapter " + adapter.getName() + ")");
+            ReceiverState.setBluetooth("waiting for a phone");
         } catch (SecurityException error) {
             return fail("Bluetooth permission refused: " + error.getMessage());
         } catch (IOException error) {
@@ -102,6 +103,7 @@ final class BluetoothBootstrapServer {
     private boolean fail(String reason) {
         running.set(false);
         Diag.log("bluetooth", "bootstrap unavailable: " + reason);
+        ReceiverState.setBluetooth("unavailable: " + reason);
         return false;
     }
 
@@ -120,6 +122,7 @@ final class BluetoothBootstrapServer {
                 socket = serverSocket.accept();
                 String who = describe(socket);
                 Diag.log("bluetooth", "phone connected: " + who);
+                ReceiverState.setBluetooth("phone connected: " + who);
                 handle(socket);
             } catch (IOException error) {
                 if (running.get()) {
@@ -173,6 +176,7 @@ final class BluetoothBootstrapServer {
         } finally {
             done.set(true);
             watchdog.interrupt();
+            ReceiverState.setBluetooth("waiting for a phone");
         }
     }
 

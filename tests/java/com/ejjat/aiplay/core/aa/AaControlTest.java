@@ -40,16 +40,13 @@ public class AaControlTest {
     }
 
     @Test
-    public void serviceDiscoveryAdvertisesFourChannels() throws Exception {
+    public void serviceDiscoveryAdvertisesAllServedChannels() throws Exception {
         AaControl.ServiceDiscoveryConfig config = new AaControl.ServiceDiscoveryConfig();
         config.headUnitName = "AiPlay-Test";
         config.carModel = "Proton X50";
         config.videoWidth = 1280;
         config.videoHeight = 720;
         config.videoFps = 30;
-        config.advertiseMediaAudio = true;
-        config.advertiseSpeechAudio = true;
-        config.advertiseInput = true;
 
         byte[] payload = AaControl.serviceDiscoveryResponse(config);
 
@@ -80,7 +77,7 @@ public class AaControlTest {
 
         assertEquals("AiPlay-Test", headUnitName);
         assertTrue(leftHandDrive);
-        assertEquals(4, channels.size());
+        assertEquals(6, channels.size());
 
         // Video: channel_id = AaChannel.VIDEO (3), av_channel.stream_type = VIDEO(3), video_configs[0].
         ProtoReader video = new ProtoReader(channels.get(0));
@@ -177,8 +174,8 @@ public class AaControlTest {
         assertEquals(48000, sampleRate);
         assertEquals(2, channelCount);
 
-        // Channel 4: input. touch config width/height present.
-        ProtoReader input = new ProtoReader(channels.get(3));
+        // Input is the fifth descriptor (video, media, speech, system, input, sensor).
+        ProtoReader input = new ProtoReader(channels.get(4));
         int touchWidth = -1;
         while (input.hasMore()) {
             int tag = input.readTag();
@@ -208,7 +205,7 @@ public class AaControlTest {
     }
 
     @Test
-    public void defaultDiscoveryOffersOnlyTheVideoChannel() throws Exception {
+    public void defaultDiscoveryOffersEveryServedChannelWithRealChannelIds() throws Exception {
         byte[] payload = AaControl.serviceDiscoveryResponse(new AaControl.ServiceDiscoveryConfig());
         ProtoReader reader = new ProtoReader(payload);
         List<Integer> ids = new ArrayList<Integer>();
@@ -228,8 +225,119 @@ public class AaControlTest {
                 reader.skip(ProtoReader.wireType(tag));
             }
         }
-        assertEquals(1, ids.size());
-        assertEquals(AaChannel.VIDEO, (int) ids.get(0));
+        assertEquals(java.util.Arrays.asList(AaChannel.VIDEO, AaChannel.MEDIA_AUDIO,
+                AaChannel.SPEECH_AUDIO, AaChannel.SYSTEM_AUDIO, AaChannel.INPUT, AaChannel.SENSOR),
+                ids);
+    }
+
+    @Test
+    public void speechAndSystemAudioAreSixteenKilohertzMono() throws Exception {
+        // ServiceFactory.cpp in OpenAuto: media 48000/16/2, speech and system 16000/16/1.
+        AaControl.ServiceDiscoveryConfig config = new AaControl.ServiceDiscoveryConfig();
+        config.advertiseVideo = false;
+        config.advertiseInput = false;
+        config.advertiseSensor = false;
+        config.advertiseMediaAudio = false;
+        config.advertiseSystemAudio = false;      // speech only
+        ProtoReader reader = new ProtoReader(AaControl.serviceDiscoveryResponse(config));
+        int rate = -1, depth = -1, channels = -1, audioType = -1;
+        boolean inCall = false;
+        while (reader.hasMore()) {
+            int tag = reader.readTag();
+            if (ProtoReader.field(tag) != 1) {
+                reader.skip(ProtoReader.wireType(tag));
+                continue;
+            }
+            ProtoReader descriptor = new ProtoReader(reader.readBytes());
+            while (descriptor.hasMore()) {
+                int dTag = descriptor.readTag();
+                if (ProtoReader.field(dTag) != 3) {
+                    descriptor.skip(ProtoReader.wireType(dTag));
+                    continue;
+                }
+                ProtoReader av = new ProtoReader(descriptor.readBytes());
+                while (av.hasMore()) {
+                    int aTag = av.readTag();
+                    switch (ProtoReader.field(aTag)) {
+                        case 2: audioType = (int) av.readVarint(); break;
+                        case 5: inCall = av.readVarint() != 0; break;
+                        case 3: {
+                            ProtoReader cfg = new ProtoReader(av.readBytes());
+                            while (cfg.hasMore()) {
+                                int cTag = cfg.readTag();
+                                switch (ProtoReader.field(cTag)) {
+                                    case 1: rate = (int) cfg.readVarint(); break;
+                                    case 2: depth = (int) cfg.readVarint(); break;
+                                    case 3: channels = (int) cfg.readVarint(); break;
+                                    default: cfg.skip(ProtoReader.wireType(cTag)); break;
+                                }
+                            }
+                            break;
+                        }
+                        default: av.skip(ProtoReader.wireType(aTag)); break;
+                    }
+                }
+            }
+        }
+        assertEquals(AaControl.AUDIO_SPEECH, audioType);
+        assertEquals(16000, rate);
+        assertEquals(16, depth);
+        assertEquals(1, channels);
+        assertTrue("available_while_in_call", inCall);
+    }
+
+    @Test
+    public void sensorDescriptorOffersDrivingStatusAndNightMode() throws Exception {
+        AaControl.ServiceDiscoveryConfig config = new AaControl.ServiceDiscoveryConfig();
+        config.advertiseVideo = false;
+        config.advertiseMediaAudio = false;
+        config.advertiseSpeechAudio = false;
+        config.advertiseSystemAudio = false;
+        config.advertiseInput = false;
+        ProtoReader reader = new ProtoReader(AaControl.serviceDiscoveryResponse(config));
+        List<Integer> types = new ArrayList<Integer>();
+        int channelId = -1;
+        while (reader.hasMore()) {
+            int tag = reader.readTag();
+            if (ProtoReader.field(tag) != 1) {
+                reader.skip(ProtoReader.wireType(tag));
+                continue;
+            }
+            ProtoReader descriptor = new ProtoReader(reader.readBytes());
+            while (descriptor.hasMore()) {
+                int dTag = descriptor.readTag();
+                if (ProtoReader.field(dTag) == 1) {
+                    channelId = (int) descriptor.readVarint();
+                } else if (ProtoReader.field(dTag) == 2) {
+                    ProtoReader sensors = new ProtoReader(descriptor.readBytes());
+                    while (sensors.hasMore()) {
+                        int sTag = sensors.readTag();
+                        ProtoReader sensor = new ProtoReader(sensors.readBytes());
+                        while (sensor.hasMore()) {
+                            int tTag = sensor.readTag();
+                            if (ProtoReader.field(tTag) == 1) {
+                                types.add((int) sensor.readVarint());
+                            } else {
+                                sensor.skip(ProtoReader.wireType(tTag));
+                            }
+                        }
+                    }
+                } else {
+                    descriptor.skip(ProtoReader.wireType(dTag));
+                }
+            }
+        }
+        assertEquals(AaChannel.SENSOR, channelId);
+        assertEquals(java.util.Arrays.asList(13, 10), types);   // DRIVING_STATUS, NIGHT_DATA
+    }
+
+    @Test
+    public void inputDescriptorAdvertisesOnlyKeysTheReceiverForwards() throws Exception {
+        for (int key : AaInput.SUPPORTED_KEYS) {
+            assertTrue(AaInput.isSupportedKey(key));
+        }
+        assertTrue("HOME stays Android's", !AaInput.isSupportedKey(3));
+        assertTrue("BACK stays Android's", !AaInput.isSupportedKey(4));
     }
 
     @Test

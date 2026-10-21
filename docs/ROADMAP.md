@@ -20,10 +20,10 @@ Acceptance: a real phone completes discovery **and** renders its UI on the head 
 - [ ] **Open question: does a phone accept a self-signed head-unit certificate?** (PROTOCOL.md 2.4) — can only be answered with a phone
 - [x] Bluetooth bootstrap message exchange (0.2.0-alpha5): RFCOMM service, `WifiStartRequest`/`WifiInfoResponse`; tested over a loopback, **RFCOMM glue never run on hardware** (PROTOCOL.md 8)
 - [ ] Make a phone actually connect: BLE advertisement of the service UUID and a headset-profile nudge, as the reference dongle does (PROTOCOL.md 8.2) — needs a real phone
-- [ ] Media audio: `AudioTrack` 48 kHz stereo with ack cadence
-- [ ] Speech audio with media ducking
-- [ ] Touch input: `TouchEventData` → `MotionEvent`, coordinate mapping per display
-- [ ] Sensor channel: day/night + driving status
+- [x] Media audio: `AudioTrack` 48 kHz stereo with ack cadence (0.2.0-alpha6)
+- [x] Speech audio with media ducking (0.2.0-alpha6; the ducking trigger is unconfirmed on phones)
+- [x] Touch input: screen → `TouchEvent` → phone, letterbox-aware mapping (0.2.0-alpha6; direction corrected: head unit sends)
+- [x] Sensor channel: day/night + driving status (0.2.0-alpha6)
 - [ ] Session recording: store a real handshake as a replayable fixture
 - [ ] Compatibility database of observed phones/ROMs
 

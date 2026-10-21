@@ -21,12 +21,14 @@ PORT=5277
 SERIAL=""
 APK=""
 INSTALL=1
+INPUT_TEST=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -s|--serial) SERIAL="$2"; shift 2 ;;
     --apk) APK="$2"; shift 2 ;;
     --no-install) INSTALL=0; shift ;;
+    --no-input-test) INPUT_TEST=0; shift ;;
     --port) PORT="$2"; shift 2 ;;
      -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -107,12 +109,15 @@ echo "== probe =="
 PROBE_STATUS=2
 SHOT="$ROOT/build/device-test-video.png"
 rm -f "$SHOT"
+PROBE_OUT="$ROOT/build/device-test-probe.txt"
+EXPECT="$ROOT/build/device-test-expect.txt"
+rm -f "$PROBE_OUT" "$EXPECT"
+INPUT_STATUS=0
 if [ -f "$ROOT/tools/aa-probe.py" ]; then
-  # The clip is 3 s at 30 fps: grab the screen while it is playing.
   # Take the screenshot once the first picture has been rendered (a slow decoder can need several
   # seconds), not after a fixed delay, which usually caught the home screen.
   (
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 120); do
       if "${ADB[@]}" logcat -d -v brief -s AiPlay:D 2>/dev/null | grep -q "video: first picture rendered"; then
         sleep 0.6
         "${ADB[@]}" exec-out screencap -p > "$SHOT" 2>/dev/null
@@ -122,9 +127,51 @@ if [ -f "$ROOT/tools/aa-probe.py" ]; then
     done
   ) &
   SHOT_PID=$!
-  python3 "$ROOT/tools/aa-probe.py" 127.0.0.1 --port "$PORT"
+
+  PROBE_ARGS=()
+  INJECT_PID=""
+  if [ "$INPUT_TEST" = "1" ]; then
+    PROBE_ARGS=(--hold 40 --stop-on night)
+    # The phone (probe) holds the session open after the clip. Once it says so, act as a person:
+    # tap the centre of the video, swipe across it, press a key, switch to night mode. The head unit
+    # must send each to the phone. Expected phone coordinates follow from the video's letterbox.
+    (
+      for _ in $(seq 1 240); do grep -q HOLD-START "$PROBE_OUT" 2>/dev/null && break; sleep 0.5; done
+      grep -q HOLD-START "$PROBE_OUT" 2>/dev/null || exit 1
+      sleep 1
+      # Measure the screen NOW: the first screenshot can be taken while the projection screen is
+      # still rotating, and `input` injects in the display's current orientation.
+      GEOM_PNG="$ROOT/build/device-test-geometry.png"
+      "${ADB[@]}" exec-out screencap -p > "$GEOM_PNG" 2>/dev/null
+      eval "$(python3 "$ROOT/tools/input-geometry.py" "$GEOM_PNG" "$EXPECT")"
+      # A tap on a letterbox bar first (when the screen has bars): it must not reach the phone.
+      if [ -n "$BARX" ]; then
+        "${ADB[@]}" shell input tap "$BARX" "$BARY"
+        sleep 1
+      fi
+      "${ADB[@]}" shell input tap "$CX" "$CY"
+      sleep 1
+      "${ADB[@]}" shell input tap "$TLX" "$TLY"
+      sleep 1
+      "${ADB[@]}" shell input tap "$BRX" "$BRY"
+      sleep 1
+      "${ADB[@]}" shell input swipe "$SX1" "$CY" "$SX2" "$CY" 500
+      sleep 1
+      "${ADB[@]}" shell input keyevent 22
+      sleep 1
+      "${ADB[@]}" shell cmd uimode night yes
+    ) &
+    INJECT_PID=$!
+  fi
+
+  python3 -u "$ROOT/tools/aa-probe.py" 127.0.0.1 --port "$PORT" "${PROBE_ARGS[@]}" > "$PROBE_OUT" 2>&1
   PROBE_STATUS=$?
+  cat "$PROBE_OUT"
   wait "$SHOT_PID" 2>/dev/null
+  if [ -n "$INJECT_PID" ]; then
+    wait "$INJECT_PID" 2>/dev/null
+    "${ADB[@]}" shell cmd uimode night no >/dev/null 2>&1
+  fi
 else
   echo "tools/aa-probe.py missing" >&2
 fi
@@ -154,8 +201,28 @@ else
 fi
 
 echo
-echo "probe exit: $PROBE_STATUS  render exit: $RENDER_STATUS  (0/0 = receiver speaks Android Auto and shows video)"
+echo "== input, sensor and audio =="
+VERIFY_STATUS=0
+if [ "$PROBE_STATUS" = "0" ] && [ "$INPUT_TEST" = "1" ]; then
+  LOGCAT_TXT="$ROOT/build/device-test-logcat.txt"
+  "${ADB[@]}" logcat -d -v brief -s AiPlay:D > "$LOGCAT_TXT" 2>/dev/null
+  if [ -s "$EXPECT" ]; then
+    python3 "$ROOT/tools/verify-input.py" "$PROBE_OUT" "$EXPECT" --audio-log "$LOGCAT_TXT"
+    VERIFY_STATUS=$?
+  else
+    echo "INPUT CHECK FAIL the probe never reached its hold phase, so no input was injected" >&2
+    VERIFY_STATUS=5
+  fi
+else
+  echo "skipped"
+fi
+
+echo
+echo "probe exit: $PROBE_STATUS  render exit: $RENDER_STATUS  input/audio exit: $VERIFY_STATUS  (0/0/0 = receiver works end to end)"
 if [ "$PROBE_STATUS" != "0" ]; then
   exit "$PROBE_STATUS"
 fi
-exit "$RENDER_STATUS"
+if [ "$RENDER_STATUS" != "0" ]; then
+  exit "$RENDER_STATUS"
+fi
+exit "$VERIFY_STATUS"

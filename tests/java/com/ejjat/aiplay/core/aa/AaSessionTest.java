@@ -69,12 +69,12 @@ public class AaSessionTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         AaSession session = new AaSession(new ByteArrayInputStream(new byte[0]), out,
                 sink(new ArrayList<String>()), discovery());
-        // Media audio is not implemented in 0.2.0: asked on its own channel, answered on it.
-        session.handle(new AaFrame(AaChannel.MEDIA_AUDIO, true, AaMessageType.CHANNEL_OPEN_REQUEST,
-                new ProtoWriter().varint(1, 0).varint(2, AaChannel.MEDIA_AUDIO).toByteArray()));
+        // The Bluetooth channel is not served: asked on its own channel, answered on it.
+        session.handle(new AaFrame(AaChannel.BLUETOOTH, true, AaMessageType.CHANNEL_OPEN_REQUEST,
+                new ProtoWriter().varint(1, 0).varint(2, AaChannel.BLUETOOTH).toByteArray()));
 
         AaFrame reply = readFrame(new ByteArrayInputStream(out.toByteArray()));
-        assertEquals(AaChannel.MEDIA_AUDIO, reply.channel);
+        assertEquals(AaChannel.BLUETOOTH, reply.channel);
         assertEquals(AaMessageType.CHANNEL_OPEN_RESPONSE, reply.messageId);
         assertEquals(0x08, reply.payload[0]);
         assertEquals(AaControl.STATUS_FAIL, reply.payload[1]);

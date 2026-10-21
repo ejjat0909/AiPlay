@@ -38,13 +38,14 @@ The condition model (P1–P5) is documented in [PLAN.md §2](PLAN.md) and
 | Enable / repair Android Auto | **working** where a root shell exists, ADB recipe otherwise |
 | Wireless receiver: plain TCP + in-band TLS, AA control plane, **video channel** | **implemented and tested** (JVM, OpenSSL peer, emulator), **not yet verified against a live phone** |
 | Receiver: video channel + H.264 decode to screen | **implemented** (0.2.0-alpha1); on-device rendering is checked by `tools/device-test.sh`, not yet run |
-| Receiver: audio / touch / sensor channels | **not implemented** — rest of milestone 0.2.0 |
+| Receiver: audio (media, speech, system), touch and keys, sensors | **implemented** (0.2.0-alpha6), emulator-verified end to end; no microphone, so no voice assistant |
 | Bluetooth bootstrap (phone learns the address and Wi-Fi) | **implemented, message exchange tested**; the Bluetooth/RFCOMM side has **never run on hardware** (docs/PROTOCOL.md 8) |
 | Real phone over Wi-Fi | **untried**. Open questions: does the phone connect to AiPlay's Bluetooth service at all (the reference dongle also advertises over BLE and nudges with a headset profile; AiPlay does not), and does it accept AiPlay's self-signed identity (docs/PROTOCOL.md 2.4, 8.2) |
 
 The receiver is honest about this: it is experimental. It completes version negotiation and service
-discovery and can show a video stream, but it has no touch, audio or sensor channels, so it cannot
-yet be used to navigate.
+discovery, shows the video, plays media/navigation/system audio, sends touches and keys back and reports
+day/night and driving status. All of that is verified against an emulator and a stand-in phone, none of it
+against a real phone, and there is no microphone channel.
 
 ## Install
 

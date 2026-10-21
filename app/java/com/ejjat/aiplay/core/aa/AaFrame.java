@@ -65,11 +65,7 @@ public final class AaFrame {
     }
 
     public String typeName() {
-        if (isControlId()) {
-            return AaMessageType.name(messageId);
-        }
-        return channel == AaChannel.VIDEO ? AaAv.name(messageId)
-                : String.format("0x%04X", messageId);
+        return AaChannel.messageName(channel, isControlId(), messageId);
     }
 
     @Override

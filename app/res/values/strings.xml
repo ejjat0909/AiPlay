@@ -36,6 +36,7 @@
     <string name="action_repair_aa">Repair Android Auto</string>
     <string name="action_start_receiver">Start wireless receiver</string>
     <string name="action_stop_receiver">Stop receiver</string>
+    <string name="action_starting_receiver">Starting…</string>
     <string name="action_probe_again">Check again</string>
     <string name="action_diagnostics">Diagnostics</string>
     <string name="action_settings">Settings</string>
@@ -86,8 +87,13 @@
     <string name="toast_receiver_started">Receiver starting</string>
 
     <!-- Receiver -->
-    <string name="receiver_running">Receiver listening on tcp %1$d · video only (experimental)</string>
+    <string name="receiver_running">Receiver listening on tcp %1$d (experimental)</string>
     <string name="receiver_stopped">Receiver stopped</string>
+    <string name="receiver_starting">Starting the receiver…</string>
+    <string name="receiver_failed">Receiver did not start: %1$s</string>
+    <string name="receiver_bluetooth">Bluetooth: %1$s</string>
+    <string name="toast_receiver_ready">Receiver is ready</string>
+    <string name="toast_receiver_failed">Receiver did not start: %1$s</string>
     <string name="notification_channel">Receiver</string>
     <string name="notification_channel_desc">Shows when the AiPlay receiver is listening for a phone.</string>
     <string name="notification_title">AiPlay receiver is on</string>

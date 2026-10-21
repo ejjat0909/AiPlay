@@ -16,6 +16,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -35,6 +36,7 @@ import com.ejjat.aiplay.device.GearheadController;
 import com.ejjat.aiplay.device.Prefs;
 import com.ejjat.aiplay.device.PrivilegedShell;
 import com.ejjat.aiplay.receiver.AaReceiverService;
+import com.ejjat.aiplay.receiver.ReceiverState;
 import com.ejjat.aiplay.ui.view.RingGauge;
 
 /** The one screen that matters: what this head unit can do, and the single action that fixes it. */
@@ -52,6 +54,8 @@ public final class HomeActivity extends Activity {
     private TextView receiverLine;
     private Button primary;
     private Button receiverToggle;
+    private ProgressBar receiverSpinner;
+    private ReceiverState.State lastReceiverState;
     private LinearLayout capabilityBox;
 
     private DeviceProfile profile;
@@ -73,7 +77,29 @@ public final class HomeActivity extends Activity {
     protected void onResume() {
         super.onResume();
         updateReceiverLine();
+        ReceiverState.addListener(receiverListener);
     }
+
+    @Override
+    protected void onPause() {
+        ReceiverState.removeListener(receiverListener);
+        super.onPause();
+    }
+
+    private final ReceiverState.Listener receiverListener = new ReceiverState.Listener() {
+        @Override
+        public void onReceiverState(ReceiverState.State state, String detail) {
+            updateReceiverLine();
+            if (lastReceiverState == ReceiverState.State.STARTING) {
+                if (state == ReceiverState.State.RUNNING) {
+                    toast(getString(R.string.toast_receiver_ready));
+                } else if (state == ReceiverState.State.FAILED) {
+                    toast(getString(R.string.toast_receiver_failed, detail));
+                }
+            }
+            lastReceiverState = state;
+        }
+    };
 
     private View buildRoot() {
         ScrollView scroll = new ScrollView(this);
@@ -180,9 +206,18 @@ public final class HomeActivity extends Activity {
         });
         right.addView(primary);
 
+        LinearLayout receiverRow = Ui.row(this);
+        receiverRow.setPadding(0, Ui.dp(this, 10), 0, 0);
+        receiverSpinner = new ProgressBar(this);
+        receiverSpinner.setIndeterminate(true);
+        receiverSpinner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(
+                Ui.dp(this, 16), Ui.dp(this, 16));
+        spinnerParams.setMargins(0, 0, Ui.dp(this, 8), 0);
+        receiverRow.addView(receiverSpinner, spinnerParams);
         receiverLine = Ui.caption(this, "");
-        receiverLine.setPadding(0, Ui.dp(this, 10), 0, 0);
-        right.addView(receiverLine);
+        receiverRow.addView(receiverLine);
+        right.addView(receiverRow);
 
         hero.addView(right);
         return hero;
@@ -225,7 +260,11 @@ public final class HomeActivity extends Activity {
         receiverToggle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                if (AaReceiverService.isRunning()) {
+                ReceiverState.State now = ReceiverState.state();
+                if (now == ReceiverState.State.STARTING) {
+                    return;     // the button is disabled while starting; ignore a stray tap
+                }
+                if (now == ReceiverState.State.RUNNING) {
                     AaReceiverService.stop(HomeActivity.this);
                     updateReceiverLine();
                 } else {
@@ -427,7 +466,6 @@ public final class HomeActivity extends Activity {
             return;
         }
         AaReceiverService.start(this);
-        toast(getString(R.string.toast_receiver_started));
         updateReceiverLine();
     }
 
@@ -449,16 +487,41 @@ public final class HomeActivity extends Activity {
         if (receiverLine == null) {
             return;
         }
-        boolean running = AaReceiverService.isRunning();
-        receiverLine.setText(running
-                ? getString(R.string.receiver_running, Prefs.receiverPort())
-                : getString(R.string.receiver_stopped));
+        ReceiverState.State state = ReceiverState.state();
+        String text;
+        switch (state) {
+            case STARTING:
+                text = getString(R.string.receiver_starting);
+                break;
+            case RUNNING: {
+                text = getString(R.string.receiver_running, Prefs.receiverPort());
+                String bluetooth = ReceiverState.bluetooth();
+                if (bluetooth.length() > 0) {
+                    text += "\n" + getString(R.string.receiver_bluetooth, bluetooth);
+                }
+                break;
+            }
+            case FAILED:
+                text = getString(R.string.receiver_failed, ReceiverState.detail());
+                break;
+            default:
+                text = getString(R.string.receiver_stopped);
+                break;
+        }
+        receiverLine.setText(text);
+        receiverLine.setTextColor(state == ReceiverState.State.FAILED ? Ui.WARN : Ui.TEXT2);
+        if (receiverSpinner != null) {
+            receiverSpinner.setVisibility(state == ReceiverState.State.STARTING
+                    ? View.VISIBLE : View.GONE);
+        }
         // The receiver is AiPlay's own feature, so it must be reachable even when Android Auto is
-        // already healthy (P1): 0.1.0 only offered it as the P4/P5 primary action, which left a
-        // phone with gearhead installed unable to start it at all.
+        // already healthy (P1). While it starts, the button says so and cannot be pressed twice.
         if (receiverToggle != null) {
-            receiverToggle.setText(running
-                    ? R.string.action_stop_receiver : R.string.action_start_receiver);
+            receiverToggle.setEnabled(state != ReceiverState.State.STARTING);
+            receiverToggle.setText(state == ReceiverState.State.STARTING
+                    ? R.string.action_starting_receiver
+                    : state == ReceiverState.State.RUNNING
+                            ? R.string.action_stop_receiver : R.string.action_start_receiver);
         }
     }
 

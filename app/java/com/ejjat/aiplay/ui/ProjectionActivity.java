@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -12,6 +14,8 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import com.ejjat.aiplay.R;
+import com.ejjat.aiplay.core.aa.AaInput;
+import com.ejjat.aiplay.core.input.TouchMapper;
 import com.ejjat.aiplay.receiver.ProjectionHub;
 
 /**
@@ -30,6 +34,8 @@ public final class ProjectionActivity extends Activity implements ProjectionHub.
     private TextView status;
     private ProjectionHub hub;
     private boolean pictureShown;
+    /** True while a gesture that began on the video is in progress. */
+    private boolean gestureOnVideo;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -83,12 +89,11 @@ public final class ProjectionActivity extends Activity implements ProjectionHub.
         if (width <= 0 || height <= 0) {
             return;
         }
-        int w = width;
-        int h = Math.round(width / ASPECT);
-        if (h > height) {
-            h = height;
-            w = Math.round(height * ASPECT);
-        }
+        // The same rectangle serves the layout and the touch mapping, so a tap lands where it looks.
+        float[] rect = TouchMapper.fit(width, height, ASPECT);
+        hub.mapper().setVideoRect(rect[0], rect[1], rect[2], rect[3]);
+        int w = Math.round(rect[2]);
+        int h = Math.round(rect[3]);
         FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) surfaceView.getLayoutParams();
         if (params.width != w || params.height != h) {
             params.width = w;
@@ -96,6 +101,63 @@ public final class ProjectionActivity extends Activity implements ProjectionHub.
             params.gravity = Gravity.CENTER;
             surfaceView.setLayoutParams(params);
         }
+    }
+
+    // ---- input: this screen's touches and keys go to the phone --------------------------------
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        forwardTouch(event);
+        return super.dispatchTouchEvent(event);
+    }
+
+    private void forwardTouch(MotionEvent event) {
+        int masked = event.getActionMasked();
+        int action = AaInput.touchActionFor(masked);
+        if (action < 0) {
+            return;
+        }
+        TouchMapper mapper = hub.mapper();
+        int[] origin = new int[2];
+        root.getLocationInWindow(origin);
+
+        int count = event.getPointerCount();
+        int[] xs = new int[count];
+        int[] ys = new int[count];
+        int[] ids = new int[count];
+        for (int i = 0; i < count; i++) {
+            float x = event.getX(i) - origin[0];
+            float y = event.getY(i) - origin[1];
+            xs[i] = mapper.mapX(x);
+            ys[i] = mapper.mapY(y);
+            ids[i] = event.getPointerId(i);
+        }
+        if (masked == MotionEvent.ACTION_DOWN) {
+            // Only a gesture that starts on the video is the phone's; a tap on a letterbox bar is not.
+            gestureOnVideo = mapper.inside(event.getX() - origin[0], event.getY() - origin[1]);
+        }
+        if (!gestureOnVideo) {
+            return;
+        }
+        hub.sendTouch(action, event.getActionIndex(), xs, ys, ids);
+        if (masked == MotionEvent.ACTION_UP || masked == MotionEvent.ACTION_CANCEL) {
+            gestureOnVideo = false;
+        }
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        // Back and Home are not forwarded: they must still leave this screen.
+        int code = event.getKeyCode();
+        if (hub.willForwardKey(code)) {
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                hub.sendKey(code, false);
+            } else if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                hub.sendKey(code, true);
+            }
+            return true;        // consumed, including auto-repeat, which the phone does not want
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override

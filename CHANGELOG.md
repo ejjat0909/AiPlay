@@ -2,6 +2,62 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha6] — 2026-10-21
+
+Start-button feedback, touch input, sensors and audio. Everything is verified on an emulator against a stand-in
+phone; **none of it has run against a real phone.**
+
+### Added
+
+* **Start button feedback.** Pressing *Start wireless receiver* now shows a spinner and "Starting…" (the button
+  is disabled meanwhile), then "Receiver is ready", or the reason it failed: port in use, the system refusing the
+  service, a 10 s timeout. The receiver line shows the Bluetooth state too ("waiting for a phone", "phone
+  connected: …", "unavailable: …"). New `ReceiverState`.
+* **Touch and keys, head unit -> phone.** The projection screen sends taps, drags and (multi-pointer) touches
+  mapped to the video rectangle, and D-pad/Enter/media keys. A gesture starting on a letterbox bar is ignored.
+  Sent from their own thread; surplus drags are dropped when the network lags.
+* **Sensor channel**: driving status (always unrestricted) and night mode, pushed again when the unit's UI mode
+  changes.
+* **Audio**: media (48 kHz stereo), speech and system sounds (16 kHz mono), audio-focus and navigation-focus
+  answers, per-channel `AudioTrack` playback fed through a bounded queue so a slow device cannot stall video or
+  input, and media ducking while a prompt plays.
+* `tools/verify-input.py`, `tools/input-geometry.py`; `aa-probe.py` rewritten around a non-blocking reader so it
+  can stream video and three audio channels at once and receive the touches and keys the head unit sends.
+* 38 new tests (153 total).
+
+### Fixed (found by the device tests)
+
+* **Audio tail wait was wrong.** The player called `stop()` and then read the playback position; Android reports
+  0 for a stopped track, so the player always waited its full 2 s deadline before ending, which also kept the
+  music ducked 2 s too long, and logged "0 played". It now waits while the track is still playing.
+* **Service discovery** now offers all six channels with their real ids (video 3, media 4, speech 5, system 6,
+  input 1, sensor 2), with per-channel audio formats; HOME and BACK are no longer advertised as input keys,
+  because they are not forwarded.
+* The projection screen no longer restarts on a day/night switch (`uiMode` in `configChanges`).
+
+### Corrected
+
+* My earlier plan had touch **backwards** (the phone sending touches to AiPlay). In Android Auto the head unit
+  captures input and sends it; the phone only binds the keys it wants (`docs/PROTOCOL.md` 9.1).
+
+### Verified
+
+* JVM: 153 tests. A concurrency test sends touch from a second thread while the session thread writes media
+  acks over the same encrypted stream; without the write lock it failed in 2 of 3 runs (it is a race, so it is
+  probabilistic).
+* Probe (OpenSSL phone) against the desktop harness: all 10 CHECK lines, video byte-identical.
+* Emulator API 34 (XL VM): `device-test.sh` exit 0 on 1920x1080, 1024x600 (bars above/below) and 1280x480 (bars
+  at the sides): taps and both video corners map to the right phone coordinates, the swipe arrives as press,
+  ~30 drags, release, the key as down/up, night mode reaches the phone, exactly four presses (bar tap not sent),
+  every audio frame written and played, music ducked and restored.
+
+### Not verified
+
+* A real phone. Whether a phone accepts the sensor set, the audio-focus answers, the touch coordinate space and
+  the ducking trigger is unknown.
+* **No microphone**: "OK Google" through the head unit does not work. Two-finger gestures are untested.
+* Audio is checked down to AudioFlinger's mixer, not by ear.
+
 ## [0.2.0-alpha5] — 2026-10-21
 
 Bluetooth bootstrap: how a phone finds the receiver. **Nothing here has run against a real phone or

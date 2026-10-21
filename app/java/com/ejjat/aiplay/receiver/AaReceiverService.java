@@ -37,6 +37,9 @@ public final class AaReceiverService extends Service {
     }
 
     public static void start(Context context) {
+        if (!RUNNING.get()) {
+            ReceiverState.set(ReceiverState.State.STARTING, "");
+        }
         Intent intent = new Intent(context, AaReceiverService.class).setAction(ACTION_START);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -46,6 +49,8 @@ public final class AaReceiverService extends Service {
             }
         } catch (RuntimeException error) {
             Diag.log("receiver", "could not start service", error);
+            ReceiverState.set(ReceiverState.State.FAILED, "Android refused to start the service: "
+                    + error.getMessage());
         }
     }
 
@@ -96,6 +101,7 @@ public final class AaReceiverService extends Service {
         } catch (Exception error) {
             Diag.log("receiver", "receiver failed to start", error);
             RUNNING.set(false);
+            ReceiverState.set(ReceiverState.State.FAILED, describe(error));
             stopSelf();
             return;
         }
@@ -109,6 +115,16 @@ public final class AaReceiverService extends Service {
         // its address (the test rig). It just cannot be found by a phone.
         bluetooth = new BluetoothBootstrapServer(this);
         bluetooth.start();
+        ReceiverState.set(ReceiverState.State.RUNNING, "");
+    }
+
+    private static String describe(Exception error) {
+        String message = error.getMessage();
+        if (error instanceof java.net.BindException) {
+            return "port " + Prefs.receiverPort() + " is already in use ("
+                    + (message == null ? "bind failed" : message) + ")";
+        }
+        return error.getClass().getSimpleName() + (message == null ? "" : ": " + message);
     }
 
     private void stopEndpoint() {
@@ -125,6 +141,9 @@ public final class AaReceiverService extends Service {
             server = null;
         }
         RUNNING.set(false);
+        if (ReceiverState.state() != ReceiverState.State.FAILED) {
+            ReceiverState.set(ReceiverState.State.STOPPED, "");
+        }
     }
 
     @Override

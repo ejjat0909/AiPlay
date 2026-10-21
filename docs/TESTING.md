@@ -112,8 +112,11 @@ adb shell wm size reset && adb shell wm density reset
 | `aa.AaControlTest` | 12 | Exact wire bytes (raw version 1.1, auth, channel open), discovery descriptors, version mismatch / missing status |
 | `aa.AaSessionTest` | 14 | Channel logic in plaintext mode: ordering, channel open on its own channel, refusal of unserved channels, video setup/focus/start/stop, per-frame acks, split-framed 50 kB picture |
 | `aa.AaCryptorTest` | 6 | In-band TLS 1.2 against a server-mode engine that requires a client certificate and advertises a non-matching issuer; 7-byte flight fragments; garbage rejected |
-| `aa.AaTransportTest` | 3 | Real TCP loopback: raw version, in-band handshake, auth in the clear, encrypted video session, every message's flags/encryption, version mismatch, early encrypted frame |
+| `aa.AaTransportTest` | 4 | Real TCP loopback: raw version, in-band handshake, auth in the clear, encrypted video session, every message's flags/encryption, version mismatch, early encrypted frame |
 | `bt.WifiBootstrapTest` | 14 | Bluetooth bootstrap: UUID/ids, hand-computed wire bytes (zero-valued required fields included), reader fragmentation, full exchange over a loopback, no SSID => nothing sent, hang-up and silent-phone handling |
+| `aa.AaChannelsTest` | 19 | Input / sensor / audio: hand-computed wire bytes, binding accepted only for advertised keys, touch not sent until bound, sensor refused for unoffered types, audio focus, every audio channel set up/start/ack/stop |
+| `input.TouchMapperTest` | 5 | Letterbox mapping on 16:9, 1024x600, 1280x480 and portrait panels; bar taps outside; edge clamping |
+| `audio.AudioCoreTest` | 10 | Bounded PCM queue (drops the oldest, never blocks, finish() keeps the tail), music ducking policy |
 | `ReceiverIdentityTest` | 2 | The committed TLS identity loads and is not PBES2 (older Android cannot read it) |
 | `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |
@@ -243,3 +246,27 @@ Success criteria for 0.1.0 on hardware:
 3. `Enable` changes the verdict to P1 without a reboot.
 4. With the receiver started, `/proc/net/tcp` shows port 5277 listening and mDNS registers.
 5. Diagnostics saves a report to `Android/data/com.ejjat.aiplay/files/reports/`.
+
+
+## Device test: input, sensor and audio (0.2.0-alpha6)
+
+`tools/device-test.sh` now ends with an input phase. After streaming the clip, `aa-probe.py` (the phone)
+stays connected (`--hold`) while the script acts as a person on the device:
+
+1. taps a **letterbox bar** (when the screen has bars): must not reach the phone;
+2. taps the **centre**, the **top-left** and the **bottom-right** corner of the *video*;
+3. **swipes** across the video;
+4. presses **DPAD_RIGHT**;
+5. switches the unit to **night mode** (`cmd uimode night yes`), then back.
+
+`tools/input-geometry.py` works out where to tap from a fresh screenshot (the projection screen rotates, and
+`input` injects in the *current* orientation; an early version measured too soon and sent swapped
+coordinates, which looked like an app bug and was a rig bug). `tools/verify-input.py` then checks what the
+phone received: coordinates within a few pixels, press then drags then release, key down then up, the night
+event, **exactly four presses** (so the bar tap was not forwarded), and from the app log that each audio
+stream was written *and played* in full and that the music was ducked and restored. Skip with
+`--no-input-test`.
+
+Verified on an API 34 emulator at 1920x1080, `wm size` 1024x600 and 1280x480. Audio goes to the emulator's
+AudioFlinger (confirmed with `dumpsys media.audio_flinger`: right sample rates and channel masks, right
+usage types, the mixer consumed every frame); what is *heard* cannot be checked here.

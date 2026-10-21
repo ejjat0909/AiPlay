@@ -36,6 +36,32 @@ public final class AaChannel {
     private AaChannel() {
     }
 
+    /** True for the channels that carry audio/video streams (setup, start, media, ack). */
+    public static boolean isAv(int channel) {
+        return channel == VIDEO || channel == MEDIA_AUDIO || channel == SPEECH_AUDIO
+                || channel == SYSTEM_AUDIO;
+    }
+
+    /**
+     * Name of a message for logs. {@code controlId} is true when the id is a control-channel id
+     * ({@link AaMessageType}): every message on channel 0, and channel open/close elsewhere.
+     */
+    public static String messageName(int channel, boolean controlId, int messageId) {
+        if (controlId) {
+            return AaMessageType.name(messageId);
+        }
+        if (isAv(channel)) {
+            return AaAv.name(messageId);
+        }
+        if (channel == INPUT) {
+            return AaInput.name(messageId);
+        }
+        if (channel == SENSOR) {
+            return AaSensor.name(messageId);
+        }
+        return String.format("0x%04X", messageId);
+    }
+
     public static String name(int channel) {
         switch (channel) {
             case CONTROL: return "control";

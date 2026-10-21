@@ -212,39 +212,56 @@ public final class AaControl {
 
         // Only what the receiver can actually serve is advertised: a channel that is offered and
         // then refused on open is worse for a phone than a channel that was never offered.
-        // 0.2.0 serves video; audio and input switch on as their channels land.
         public boolean advertiseVideo = true;
-        public boolean advertiseMediaAudio = false;
-        public boolean advertiseSpeechAudio = false;
-        public boolean advertiseInput = false;
+        public boolean advertiseMediaAudio = true;
+        public boolean advertiseSpeechAudio = true;
+        public boolean advertiseSystemAudio = true;
+        public boolean advertiseInput = true;
+        public boolean advertiseSensor = true;
 
         public int videoWidth = 1280;
         public int videoHeight = 720;
         public int videoDpi = 160;
         public int videoFps = 30;
 
-        public int sampleRate = 48000;
-        public int bitDepth = 16;
-        public int channelCount = 2;
-
         public int touchWidth = 1280;
         public int touchHeight = 720;
 
         java.util.List<ProtoWriter> channels() {
-            java.util.List<ProtoWriter> channels = new java.util.ArrayList<ProtoWriter>(4);
+            java.util.List<ProtoWriter> channels = new java.util.ArrayList<ProtoWriter>(6);
             if (advertiseVideo) {
-                channels.add(descriptor(AaChannel.VIDEO, avChannel(STREAM_VIDEO, 0)));
+                channels.add(descriptor(AaChannel.VIDEO, avChannel(STREAM_VIDEO, 0, null)));
             }
             if (advertiseMediaAudio) {
-                channels.add(descriptor(AaChannel.MEDIA_AUDIO, avChannel(STREAM_AUDIO, AUDIO_MEDIA)));
+                channels.add(descriptor(AaChannel.MEDIA_AUDIO,
+                        avChannel(STREAM_AUDIO, AUDIO_MEDIA, AaAudio.MEDIA)));
             }
             if (advertiseSpeechAudio) {
-                channels.add(descriptor(AaChannel.SPEECH_AUDIO, avChannel(STREAM_AUDIO, AUDIO_SPEECH)));
+                channels.add(descriptor(AaChannel.SPEECH_AUDIO,
+                        avChannel(STREAM_AUDIO, AUDIO_SPEECH, AaAudio.SPEECH)));
+            }
+            if (advertiseSystemAudio) {
+                channels.add(descriptor(AaChannel.SYSTEM_AUDIO,
+                        avChannel(STREAM_AUDIO, AUDIO_SYSTEM, AaAudio.SYSTEM)));
             }
             if (advertiseInput) {
                 channels.add(inputDescriptor(AaChannel.INPUT));
             }
+            if (advertiseSensor) {
+                channels.add(sensorDescriptor(AaChannel.SENSOR));
+            }
             return channels;
+        }
+
+        /**
+         * {@code ChannelDescriptor.sensor_channel = 2} {@code { sensors = 1 { type = 1 } }}: the
+         * two sensors OpenAuto offers, driving status and night mode.
+         */
+        private ProtoWriter sensorDescriptor(int channelId) {
+            ProtoWriter sensors = new ProtoWriter()
+                    .message(1, new ProtoWriter().varint(1, AaSensor.TYPE_DRIVING_STATUS))
+                    .message(1, new ProtoWriter().varint(1, AaSensor.TYPE_NIGHT_DATA));
+            return new ProtoWriter().varint(1, channelId).message(2, sensors);
         }
 
         private ProtoWriter descriptor(int channelId, ProtoWriter avChannel) {
@@ -257,9 +274,8 @@ public final class AaControl {
         private ProtoWriter inputDescriptor(int channelId) {
             ProtoWriter touch = new ProtoWriter().varint(1, touchWidth).varint(2, touchHeight);
             ProtoWriter input = new ProtoWriter();
-            // A minimal, documented key set: home, back, dpad, enter, media transport.
-            int[] keys = {3, 4, 19, 20, 21, 22, 23, 85, 87, 88, 126, 127};
-            for (int key : keys) {
+            // Only keys the receiver forwards (AaInput.SUPPORTED_KEYS): dpad, enter, media transport.
+            for (int key : AaInput.SUPPORTED_KEYS) {
                 input.varint(1, key);
             }
             input.message(2, touch);
@@ -273,16 +289,17 @@ public final class AaControl {
          * {@code AVChannel}: {@code stream_type = 1}, {@code audio_type = 2},
          * {@code audio_configs = 3}, {@code video_configs = 4}, {@code available_while_in_call = 5}.
          */
-        private ProtoWriter avChannel(int streamType, int audioType) {
+        private ProtoWriter avChannel(int streamType, int audioType, AaAudio.Format audio) {
             ProtoWriter channel = new ProtoWriter();
             channel.varint(1, streamType);
             if (streamType == STREAM_AUDIO) {
                 channel.varint(2, audioType);
-                ProtoWriter audio = new ProtoWriter()
-                        .varint(1, sampleRate)
-                        .varint(2, bitDepth)
-                        .varint(3, channelCount);
-                channel.message(3, audio);
+                ProtoWriter config = new ProtoWriter()
+                        .varint(1, audio.sampleRate)
+                        .varint(2, audio.bitDepth)
+                        .varint(3, audio.channels);
+                channel.message(3, config);
+                channel.bool(5, true);      // available_while_in_call, as OpenAuto sets it
             } else {
                 ProtoWriter video = new ProtoWriter()
                         .varint(1, resolutionEnum())
@@ -292,8 +309,8 @@ public final class AaControl {
                         .varint(5, videoDpi)
                         .varint(6, 0);
                 channel.message(4, video);
+                channel.bool(5, false);
             }
-            channel.bool(5, false);
             return channel;
         }
 

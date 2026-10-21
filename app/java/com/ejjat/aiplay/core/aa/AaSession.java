@@ -3,8 +3,6 @@ package com.ejjat.aiplay.core.aa;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * One Android Auto session over an established byte stream.
@@ -13,7 +11,7 @@ import java.util.List;
  * streams here, which means the whole exchange can be exercised by a desktop JVM test.</p>
  *
  * <p>Order on the wire (aasdk + OpenAuto, head-unit role): the head unit sends the version request;
- * the phone answers; the head unit — the TLS <em>client</em> — then runs a TLS 1.2 handshake carried
+ * the phone answers; the head unit, the TLS <em>client</em>, then runs a TLS 1.2 handshake carried
  * in {@code SSL_HANDSHAKE} messages and sends auth-complete; from then on every frame is encrypted
  * except those three message types. See {@link AaCryptor}.</p>
  *
@@ -21,13 +19,14 @@ import java.util.List;
  * response directly). That exists so channel logic can be unit-tested without TLS; the receiver
  * always passes a cryptor.</p>
  *
- * <p>Implemented: version negotiation, TLS, auth complete, service discovery, ping, shutdown, and
- * the video channel: channel open, AV setup, start/stop, video focus, media acks. Audio, input and
- * sensor channels are not implemented; they are not advertised and an attempt to open one is
- * answered with FAIL and logged, never silently dropped.</p>
+ * <p>Channels served: video; media, speech and system audio; input (touch and keys, which flow from
+ * the head unit to the phone); sensor (driving status, night mode). Plus audio and navigation focus on
+ * the control channel. A channel that is not served is refused with FAIL and logged, never silently
+ * dropped.</p>
  *
- * <p>Wire format: see {@link AaFrameCodec}. Every message carries a channel id and a flags byte
- * before its size; the message id is the first two bytes of the message payload.</p>
+ * <p><b>Threads.</b> {@link #pump} and everything it triggers run on one session thread. The
+ * {@code send*}/{@code push*} methods may be called from any thread: all writes go through one lock,
+ * which also keeps TLS records in the order they were encrypted.</p>
  */
 public final class AaSession {
 
@@ -57,32 +56,67 @@ public final class AaSession {
         void onVideoFocus(boolean focused);
     }
 
+    /** Receives the phone's audio. Called on the session thread; must not block. */
+    public interface AudioSink {
+        /** A stream started on {@code channel} ({@link AaChannel#MEDIA_AUDIO} etc). */
+        void onAudioStart(int channel, int session);
+
+        /** One chunk of 16-bit little-endian PCM in the channel's {@link AaAudio.Format}. */
+        void onAudioData(int channel, long timestampMicros, byte[] data, int offset, int length);
+
+        void onAudioStop(int channel);
+
+        /** The phone asked for audio focus ({@link AaAudio} types); {@code grantedState} was sent. */
+        void onAudioFocus(int requestedType, int grantedState);
+    }
+
+    /** What the head unit reports to the phone's sensor requests. */
+    public interface SensorSource {
+        boolean isNight();
+
+        /** {@code DrivingStatus} flags; {@link AaSensor#DRIVING_UNRESTRICTED} when not tracked. */
+        int drivingStatus();
+    }
+
     /**
-     * Frames the phone may send before it has to wait for an ack. 1 is the most conservative value;
-     * every media frame is acked.
+     * Frames the phone may send before it has to wait for an ack. 1 is the most conservative value
+     * and what OpenAuto answers; every media frame is acked.
      */
-    public static final int VIDEO_MAX_UNACKED = 1;
+    public static final int MAX_UNACKED = 1;
+    /** Kept for callers written before audio existed. */
+    public static final int VIDEO_MAX_UNACKED = MAX_UNACKED;
 
     private static final int MAX_MESSAGE = AaFrameCodec.MAX_MESSAGE_PAYLOAD;
     private static final int LOG_EVERY_FRAMES = 150;
+
+    /** State of one audio/video channel. */
+    private static final class AvState {
+        boolean open;
+        boolean started;
+        int session;
+        long frames;
+        long bytes;
+    }
 
     private final InputStream input;
     private final OutputStream output;
     private final Sink sink;
     private final AaFrameCodec.Parser parser = new AaFrameCodec.Parser();
-    private final List<AaFrame> pending = new ArrayList<AaFrame>();
     private final AaControl.ServiceDiscoveryConfig discovery;
-
     private final AaCryptor cryptor;
+    private final Object writeLock = new Object();
+    private final AvState[] av = new AvState[9];
 
     private VideoSink videoSink;
+    private AudioSink audioSink;
+    private SensorSource sensorSource;
     private boolean versionSent;
-    private boolean encrypting;
-    private boolean videoOpen;
-    private boolean videoStarted;
-    private int videoSession;
-    private long videoFrames;
-    private long videoBytes;
+    private volatile boolean encrypting;
+    private volatile boolean inputOpen;
+    private volatile boolean inputBound;
+    private volatile boolean sensorOpen;
+    private volatile boolean nightSubscribed;
+    private volatile boolean drivingSubscribed;
 
     /** Plaintext session (tests): no TLS handshake. */
     public AaSession(InputStream input, OutputStream output, Sink sink,
@@ -97,6 +131,9 @@ public final class AaSession {
         this.sink = sink;
         this.discovery = discovery;
         this.cryptor = cryptor;
+        for (int i = 0; i < av.length; i++) {
+            av[i] = new AvState();
+        }
     }
 
     /** True once the TLS handshake finished and outgoing frames are being encrypted. */
@@ -108,12 +145,33 @@ public final class AaSession {
         this.videoSink = videoSink;
     }
 
+    public void setAudioSink(AudioSink audioSink) {
+        this.audioSink = audioSink;
+    }
+
+    public void setSensorSource(SensorSource sensorSource) {
+        this.sensorSource = sensorSource;
+    }
+
     public long videoFrames() {
-        return videoFrames;
+        return av[AaChannel.VIDEO].frames;
     }
 
     public boolean isVideoStarted() {
-        return videoStarted;
+        return av[AaChannel.VIDEO].started;
+    }
+
+    public long audioFrames(int channel) {
+        return av[channel].frames;
+    }
+
+    public boolean isAudioStarted(int channel) {
+        return av[channel].started;
+    }
+
+    /** True once the phone's binding request was accepted: touch and key events may be sent. */
+    public boolean isInputBound() {
+        return inputBound;
     }
 
     /** Sends the head unit's version request. Called once, right after the transport is up. */
@@ -134,7 +192,7 @@ public final class AaSession {
         int read = input.read(buffer);
         if (read < 0) {
             event("peer closed the session");
-            finishVideo();
+            finishAll();
             return -1;
         }
         final int[] handled = {0};
@@ -151,18 +209,7 @@ public final class AaSession {
     /** Processes one message and writes any replies. Exposed for tests. */
     public void handle(AaFrame frame) throws IOException, AaProtocolException {
         if (frame.channel != AaChannel.CONTROL) {
-            // aasdk dispatches on the message id: channel open is a CONTROL-typed message on the
-            // channel itself, everything else is channel-specific.
-            if (frame.messageId == AaMessageType.CHANNEL_OPEN_REQUEST && frame.control) {
-                openChannel(frame);
-            } else if (frame.channel == AaChannel.VIDEO && videoOpen) {
-                handleVideo(frame);
-            } else if (frame.channel == AaChannel.VIDEO) {
-                event("video message " + frame + " before the channel was opened — ignored");
-            } else {
-                event("message " + frame + " on " + AaChannel.name(frame.channel)
-                        + " — channel not implemented");
-            }
+            handleChannel(frame);
             return;
         }
         switch (frame.messageId) {
@@ -210,6 +257,22 @@ public final class AaSession {
                         AaControl.serviceDiscoveryResponse(discovery));
                 break;
             }
+            case AaMessageType.AUDIO_FOCUS_REQUEST: {
+                int type = AaAudio.parseFocusType(frame.payload);
+                int state = AaAudio.stateFor(type);
+                event("audio focus request, type " + type + " -> state " + state);
+                sendControl(AaMessageType.AUDIO_FOCUS_RESPONSE, AaAudio.focusResponse(state));
+                if (audioSink != null) {
+                    audioSink.onAudioFocus(type, state);
+                }
+                break;
+            }
+            case AaMessageType.NAVIGATION_FOCUS_REQUEST: {
+                event("navigation focus request");
+                sendControl(AaMessageType.NAVIGATION_FOCUS_RESPONSE,
+                        AaAudio.navigationFocusResponse());
+                break;
+            }
             case AaMessageType.PING_REQUEST: {
                 event("ping");
                 sendControl(AaMessageType.PING_RESPONSE,
@@ -218,7 +281,7 @@ public final class AaSession {
             }
             case AaMessageType.SHUTDOWN_REQUEST: {
                 event("peer requested shutdown");
-                finishVideo();
+                finishAll();
                 sendControl(AaMessageType.SHUTDOWN_RESPONSE, new byte[0]);
                 break;
             }
@@ -229,101 +292,259 @@ public final class AaSession {
         }
     }
 
+    // ---- channels -----------------------------------------------------------------------------
+
+    private void handleChannel(AaFrame frame) throws IOException {
+        int channel = frame.channel;
+        // aasdk dispatches on the message id: channel open is a CONTROL-typed message on the
+        // channel itself, everything else is channel-specific.
+        if (frame.messageId == AaMessageType.CHANNEL_OPEN_REQUEST && frame.control) {
+            openChannel(frame);
+        } else if (AaChannel.isAv(channel)) {
+            if (av[channel].open) {
+                handleAv(frame);
+            } else {
+                event(AaChannel.name(channel) + " message " + frame
+                        + " before the channel was opened — ignored");
+            }
+        } else if (channel == AaChannel.INPUT && inputOpen) {
+            handleInput(frame);
+        } else if (channel == AaChannel.SENSOR && sensorOpen) {
+            handleSensor(frame);
+        } else {
+            event("message " + frame + " on " + AaChannel.name(channel)
+                    + " — channel not open or not implemented");
+        }
+    }
+
+    private boolean served(int channel) {
+        switch (channel) {
+            case AaChannel.VIDEO: return discovery.advertiseVideo;
+            case AaChannel.MEDIA_AUDIO: return discovery.advertiseMediaAudio;
+            case AaChannel.SPEECH_AUDIO: return discovery.advertiseSpeechAudio;
+            case AaChannel.SYSTEM_AUDIO: return discovery.advertiseSystemAudio;
+            case AaChannel.INPUT: return discovery.advertiseInput;
+            case AaChannel.SENSOR: return discovery.advertiseSensor;
+            default: return false;
+        }
+    }
+
     /**
      * A phone opens a channel by sending {@code ChannelOpenRequest} <em>on that channel</em>
      * (CONTROL-typed); the answer goes back on the same channel the same way.
      */
     private void openChannel(AaFrame frame) throws IOException {
         int target = frame.channel;
-        boolean accept = target == AaChannel.VIDEO && discovery.advertiseVideo;
+        boolean accept = served(target);
         event("channel open request for " + AaChannel.name(target)
                 + (accept ? " — accepted" : " — refused (not implemented)"));
         if (accept) {
-            videoOpen = true;
+            if (AaChannel.isAv(target)) {
+                av[target].open = true;
+            } else if (target == AaChannel.INPUT) {
+                inputOpen = true;
+            } else if (target == AaChannel.SENSOR) {
+                sensorOpen = true;
+            }
         }
         send(target, true, AaMessageType.CHANNEL_OPEN_RESPONSE,
                 AaControl.channelOpenResponse(accept ? AaControl.STATUS_OK : AaControl.STATUS_FAIL));
     }
 
-    private void handleVideo(AaFrame frame) throws IOException {
+    // ---- audio / video ------------------------------------------------------------------------
+
+    private void handleAv(AaFrame frame) throws IOException {
+        int channel = frame.channel;
+        AvState state = av[channel];
+        String label = AaChannel.name(channel);
         switch (frame.messageId) {
             case AaAv.SETUP_REQUEST: {
                 int index = AaAv.parseSetupRequest(frame.payload);
                 boolean ok = index == 0;
-                event("video setup request, config " + index + (ok ? "" : " — refused"));
-                if (ok && videoSink != null) {
+                event(label + " setup request, config " + index + (ok ? "" : " — refused"));
+                if (ok && channel == AaChannel.VIDEO && videoSink != null) {
                     videoSink.onVideoSetup(index);
                 }
-                send(AaChannel.VIDEO, false, AaAv.SETUP_RESPONSE,
-                        AaAv.setupResponse(ok ? AaAv.SETUP_OK : AaAv.SETUP_FAIL,
-                                VIDEO_MAX_UNACKED, 0));
+                send(channel, false, AaAv.SETUP_RESPONSE,
+                        AaAv.setupResponse(ok ? AaAv.SETUP_OK : AaAv.SETUP_FAIL, MAX_UNACKED, 0));
                 break;
             }
             case AaAv.VIDEO_FOCUS_REQUEST: {
+                if (channel != AaChannel.VIDEO) {
+                    event(label + " message " + frame + " — not handled");
+                    break;
+                }
                 boolean focused = AaAv.parseVideoFocusMode(frame.payload) != AaAv.FOCUS_UNFOCUSED;
                 event("video focus request: " + (focused ? "focused" : "unfocused"));
                 if (videoSink != null) {
                     videoSink.onVideoFocus(focused);
                 }
-                send(AaChannel.VIDEO, false, AaAv.VIDEO_FOCUS_INDICATION,
+                send(channel, false, AaAv.VIDEO_FOCUS_INDICATION,
                         AaAv.videoFocusIndication(
                                 focused ? AaAv.FOCUS_FOCUSED : AaAv.FOCUS_UNFOCUSED, false));
                 break;
             }
             case AaAv.START_INDICATION: {
                 int[] start = AaAv.parseStartIndication(frame.payload);
-                videoSession = start[0];
-                videoStarted = true;
-                event("video start: session " + start[0] + ", config " + start[1]);
-                if (videoSink != null) {
-                    videoSink.onVideoStart(start[0], start[1]);
+                state.session = start[0];
+                state.started = true;
+                event(label + " start: session " + start[0] + ", config " + start[1]);
+                if (channel == AaChannel.VIDEO) {
+                    if (videoSink != null) {
+                        videoSink.onVideoStart(start[0], start[1]);
+                    }
+                } else if (audioSink != null) {
+                    audioSink.onAudioStart(channel, start[0]);
                 }
                 break;
             }
             case AaAv.STOP_INDICATION: {
-                event("video stop");
-                finishVideo();
+                event(label + " stop");
+                finish(channel);
                 break;
             }
             case AaAv.MEDIA_WITH_TIMESTAMP:
             case AaAv.MEDIA: {
-                handleMedia(frame);
+                handleMedia(frame, state);
                 break;
             }
             default: {
-                event("video message " + frame + " — not handled");
+                event(label + " message " + frame + " — not handled");
                 break;
             }
         }
     }
 
-    private void handleMedia(AaFrame frame) throws IOException {
+    private void handleMedia(AaFrame frame, AvState state) throws IOException {
+        int channel = frame.channel;
         long timestamp = AaAv.mediaTimestamp(frame.messageId, frame.payload);
         int offset = AaAv.mediaDataOffset(frame.messageId, frame.payload);
         int length = frame.payload.length - offset;
-        videoFrames++;
-        videoBytes += length;
-        if (videoFrames == 1 || videoFrames % LOG_EVERY_FRAMES == 0) {
-            event("video frame " + videoFrames + " (" + length + "B"
+        state.frames++;
+        state.bytes += length;
+        if (state.frames == 1 || state.frames % LOG_EVERY_FRAMES == 0) {
+            event(AaChannel.name(channel) + " frame " + state.frames + " (" + length + "B"
                     + (timestamp >= 0 ? ", ts " + timestamp + "us" : "") + "), "
-                    + videoBytes + "B total");
+                    + state.bytes + "B total");
         }
-        if (videoSink != null) {
-            videoSink.onVideoFrame(timestamp, frame.payload, offset, length);
+        if (channel == AaChannel.VIDEO) {
+            if (videoSink != null) {
+                videoSink.onVideoFrame(timestamp, frame.payload, offset, length);
+            }
+        } else if (audioSink != null) {
+            audioSink.onAudioData(channel, timestamp, frame.payload, offset, length);
         }
-        // Every frame is acked, quietly: 30 log lines a second would bury everything else.
-        write(AaChannel.VIDEO, false, AaAv.MEDIA_ACK, AaAv.mediaAck(videoSession, 1));
+        // Every message is acked, quietly: 30 log lines a second would bury everything else.
+        write(channel, false, AaAv.MEDIA_ACK, AaAv.mediaAck(state.session, 1));
     }
 
-    private void finishVideo() {
-        if (videoStarted) {
-            videoStarted = false;
-            event("video ended after " + videoFrames + " frame(s), " + videoBytes + "B");
+    private void finish(int channel) {
+        AvState state = av[channel];
+        if (!state.started) {
+            return;
+        }
+        state.started = false;
+        event(AaChannel.name(channel) + " ended after " + state.frames + " frame(s), "
+                + state.bytes + "B");
+        if (channel == AaChannel.VIDEO) {
             if (videoSink != null) {
                 videoSink.onVideoStop();
             }
+        } else if (audioSink != null) {
+            audioSink.onAudioStop(channel);
         }
     }
+
+    private void finishAll() {
+        for (int channel = 0; channel < av.length; channel++) {
+            if (AaChannel.isAv(channel)) {
+                finish(channel);
+            }
+        }
+        inputBound = false;
+        nightSubscribed = false;
+        drivingSubscribed = false;
+    }
+
+    // ---- input: head unit -> phone ------------------------------------------------------------
+
+    private void handleInput(AaFrame frame) throws IOException {
+        if (frame.messageId != AaInput.BINDING_REQUEST) {
+            event("input message " + frame + " — not handled");
+            return;
+        }
+        int[] codes = AaInput.parseBindingRequest(frame.payload);
+        boolean ok = AaInput.bindingAcceptable(codes);
+        inputBound = ok;
+        event("input binding request, " + codes.length + " key(s) -> " + (ok ? "OK" : "FAIL"));
+        send(AaChannel.INPUT, false, AaInput.BINDING_RESPONSE, AaInput.bindingResponse(ok));
+    }
+
+    /**
+     * Sends one touch indication to the phone. Returns false (and sends nothing) until the phone
+     * has bound the input channel. Safe to call from any thread.
+     */
+    public boolean sendTouch(long timestampMicros, int action, int actionIndex, int[] xs, int[] ys,
+                             int[] pointerIds) throws IOException {
+        if (!inputBound) {
+            return false;
+        }
+        write(AaChannel.INPUT, false, AaInput.INPUT_EVENT_INDICATION,
+                AaInput.touchEvent(timestampMicros, action, actionIndex, xs, ys, pointerIds));
+        return true;
+    }
+
+    /** Sends one key press or release ({@link AaInput#SUPPORTED_KEYS}). Any thread. */
+    public boolean sendButton(long timestampMicros, int scanCode, boolean pressed)
+            throws IOException {
+        if (!inputBound || !AaInput.isSupportedKey(scanCode)) {
+            return false;
+        }
+        write(AaChannel.INPUT, false, AaInput.INPUT_EVENT_INDICATION,
+                AaInput.buttonEvent(timestampMicros, scanCode, pressed));
+        return true;
+    }
+
+    // ---- sensor -------------------------------------------------------------------------------
+
+    private void handleSensor(AaFrame frame) throws IOException {
+        if (frame.messageId != AaSensor.START_REQUEST) {
+            event("sensor message " + frame + " — not handled");
+            return;
+        }
+        int type = AaSensor.parseStartRequest(frame.payload);
+        boolean ok = type == AaSensor.TYPE_DRIVING_STATUS || type == AaSensor.TYPE_NIGHT_DATA;
+        event("sensor start request, type " + type + (ok ? "" : " — not offered"));
+        send(AaChannel.SENSOR, false, AaSensor.START_RESPONSE, AaSensor.startResponse(ok));
+        if (type == AaSensor.TYPE_DRIVING_STATUS) {
+            drivingSubscribed = true;
+            sendDrivingStatus();
+        } else if (type == AaSensor.TYPE_NIGHT_DATA) {
+            nightSubscribed = true;
+            sendNightMode(sensorSource != null && sensorSource.isNight());
+        }
+    }
+
+    private void sendDrivingStatus() throws IOException {
+        int status = sensorSource == null ? AaSensor.DRIVING_UNRESTRICTED
+                : sensorSource.drivingStatus();
+        send(AaChannel.SENSOR, false, AaSensor.EVENT_INDICATION, AaSensor.drivingStatus(status));
+    }
+
+    private void sendNightMode(boolean night) throws IOException {
+        send(AaChannel.SENSOR, false, AaSensor.EVENT_INDICATION, AaSensor.nightMode(night));
+    }
+
+    /** Tells the phone the head unit switched day/night, if it asked for night data. Any thread. */
+    public boolean pushNightMode(boolean night) throws IOException {
+        if (!nightSubscribed) {
+            return false;
+        }
+        sendNightMode(night);
+        return true;
+    }
+
+    // ---- writing ------------------------------------------------------------------------------
 
     /** A message on channel 0. aasdk sends these as SPECIFIC: the CONTROL flag stays clear. */
     private void sendControl(int messageId, byte[] payload) throws IOException {
@@ -335,9 +556,7 @@ public final class AaSession {
         write(channel, control, messageId, payload);
         boolean controlId = channel == AaChannel.CONTROL || control;
         event("sent " + AaChannel.name(channel) + "/"
-                + (controlId ? AaMessageType.name(messageId)
-                        : channel == AaChannel.VIDEO ? AaAv.name(messageId)
-                        : String.format("0x%04X", messageId))
+                + AaChannel.messageName(channel, controlId, messageId)
                 + " (" + payload.length + "B)");
     }
 
@@ -354,10 +573,14 @@ public final class AaSession {
         if (payload.length + 2 > MAX_MESSAGE) {
             throw new IOException("message too large: " + payload.length);
         }
-        boolean encrypt = encrypting && cryptor != null && !alwaysPlain(channel, messageId);
-        output.write(AaFrameCodec.encode(channel, control, messageId, payload,
-                encrypt ? cryptor : null));
-        output.flush();
+        // Encrypt and write under one lock: TLS records must reach the phone in the order they
+        // were produced, and the engine is shared with the session thread's decryption.
+        synchronized (writeLock) {
+            boolean encrypt = encrypting && cryptor != null && !alwaysPlain(channel, messageId);
+            output.write(AaFrameCodec.encode(channel, control, messageId, payload,
+                    encrypt ? cryptor : null));
+            output.flush();
+        }
     }
 
     private void event(String message) {
