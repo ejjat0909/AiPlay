@@ -40,9 +40,7 @@ public final class Diag {
             }
             LINES.addLast(line);
         }
-        if (Prefs.showSplash() || BuildConfig.VERSION_CODE > 0) {
-            android.util.Log.d("AiPlay", line);
-        }
+        android.util.Log.d("AiPlay", line);
     }
 
     public static void log(String area, String message, Throwable error) {

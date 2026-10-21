@@ -78,20 +78,20 @@ public final class HomeActivity extends Activity {
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(Ui.BG1);
 
-        LinearLayout root = Ui.column(this, 20);
+        LinearLayout root = Ui.column(this, 16);
         root.setLayoutParams(new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         root.addView(buildHeader());
-        root.addView(Ui.spacer(this, 14));
+        root.addView(Ui.spacer(this, 10));
         root.addView(buildHero());
-        root.addView(Ui.spacer(this, 22));
+        root.addView(Ui.spacer(this, 14));
         root.addView(buildCapabilitiesHeader());
         root.addView(Ui.spacer(this, 8));
 
         capabilityBox = Ui.column(this, 0);
         root.addView(capabilityBox);
-        root.addView(Ui.spacer(this, 22));
+        root.addView(Ui.spacer(this, 14));
         root.addView(buildFooter());
 
         scroll.addView(root);
@@ -143,12 +143,12 @@ public final class HomeActivity extends Activity {
     private View buildHero() {
         LinearLayout hero = Ui.row(this);
         hero.setBackground(Ui.outlined(this, Ui.SURFACE, Ui.RADIUS_CARD_DP, Ui.LINE, 1f));
-        hero.setPadding(Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18));
+        hero.setPadding(Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14));
 
         gauge = new RingGauge(this);
         LinearLayout.LayoutParams gaugeParams = new LinearLayout.LayoutParams(
-                Ui.dp(this, 132), Ui.dp(this, 132));
-        gaugeParams.setMargins(0, 0, Ui.dp(this, 20), 0);
+                Ui.dp(this, 112), Ui.dp(this, 112));
+        gaugeParams.setMargins(0, 0, Ui.dp(this, 16), 0);
         gauge.setLayoutParams(gaugeParams);
         gauge.setLabel("READY");
         hero.addView(gauge);
@@ -166,7 +166,7 @@ public final class HomeActivity extends Activity {
         statusBody = Ui.text(this, "", 13, Ui.TEXT1);
         right.addView(statusBody);
 
-        right.addView(Ui.spacer(this, 14));
+        right.addView(Ui.spacer(this, 10));
 
         primary = Ui.primaryButton(this, getString(R.string.action_probe_again));
         primary.setEnabled(false);
@@ -282,7 +282,7 @@ public final class HomeActivity extends Activity {
 
     private View buildCapabilityRow(Capability capability) {
         LinearLayout row = Ui.row(this);
-        row.setPadding(0, Ui.dp(this, 9), 0, Ui.dp(this, 9));
+        row.setPadding(0, Ui.dp(this, 5), 0, Ui.dp(this, 5));
 
         View dot = new View(this);
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(

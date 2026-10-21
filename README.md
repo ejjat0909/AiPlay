@@ -58,7 +58,12 @@ See [docs/BUILD.md](docs/BUILD.md).
 
 | Splash | Home |
 | --- | --- |
-| ![splash](docs/splash.png) | ![home](docs/home.png) |
+| ![splash](docs/splash-preview.png) | ![home](docs/home-preview.png) |
+
+Both images are **design reference renders** produced by `tools/gen-preview.py` from the same
+geometry, palette and easing constants as `SplashView.java` and `HomeActivity.java`. They are
+not device screenshots — see [docs/TESTING.md](docs/TESTING.md) for what was and was not run
+on hardware.
 
 ## Why not just port DiPlay?
 
