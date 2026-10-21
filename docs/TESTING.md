@@ -13,7 +13,7 @@ README maps to a row here.
 | L3 | Readiness matrix P1–P5 incl. contradictory profiles | JUnit 4 | **pass** |
 | L4 | APK static verification | `aapt2`, `apksigner`, `dexdump` | **pass** |
 | L5 | Real TLS handshake + AA control exchange | JUnit 4 over loopback TLS | **pass** |
-| L6 | Install and run on a device/emulator | `adb` | **not run** (see §6) |
+| L6 | Install and run on a device/emulator, receiver answers a probe | `tools/device-test.sh` | **scripted**, not yet run by the maintainer |
 | L7 | Projection against a real phone | phone + car | **not run** — 0.2.0 |
 
 ## 2. Reproduce
@@ -35,6 +35,68 @@ JUnit version 4.13.2
 .....................................................
 Time: 1.242
 OK (62 tests)
+```
+
+## 2.1 The three rigs, and what each one can prove
+
+`tools/device-test.sh` runs the same loop against any of them: install, launch, start the
+receiver, `adb forward tcp:5277`, then `tools/aa-probe.py 127.0.0.1`. The forward is why the
+emulator works at all — it bypasses mDNS and the emulator's NAT, which is the only thing the
+laptop cannot do by itself.
+
+| Rig | Head unit runs on | Phone side runs on | Proves | Cannot prove |
+| --- | --- | --- | --- | --- |
+| 1 | emulator | laptop (`aa-probe.py`) | framing, TLS, control exchange, channel open, UI layout | codecs, real discovery, real phone |
+| 2 | phone over USB/Wi-Fi adb | laptop | the same, on real hardware and real MediaCodec | real phone either |
+| 3 | head unit (or phone) | **real phone** with Android Auto | the actual product | needs 0.2.0 video/input first |
+
+A real phone **cannot** be the source for an emulator head unit: the emulator sits behind NAT
+(`10.0.2.x`), is not reachable over mDNS, and has no USB-AOA passthrough. Rig 1 and rig 2 use a
+software phone on purpose; rig 3 is the only place a real Android Auto phone can be used.
+
+### Rig 1 — emulator as the head unit (fastest loop, no car, no phone)
+
+```sh
+sdkmanager "system-images;android-34;google_apis;x86_64"   # once
+avdmanager create avd -n aiplay-hu -k "system-images;android-34;google_apis;x86_64"
+emulator -avd aiplay-hu -skin 1024x600 -no-snapshot -gpu swiftshader_indirect &
+adb wait-for-device
+./tools/device-test.sh -s emulator-5554
+```
+
+### Rig 2 — a phone as the head unit (real hardware, real codecs)
+
+```sh
+adb devices                     # note the serial if more than one
+./tools/device-test.sh -s <serial>
+```
+
+### Rig 3 — real phone to real head unit (the only end-to-end proof)
+
+Both on the same Wi-Fi, receiver started in the app, then connect from the phone's Android Auto
+UI. Not testable before 0.2.0 ships video and input.
+
+### Reading a run
+
+Expected on 0.1.3 (framing correct, no video channel yet):
+
+```
+<- control    SERVICE_DISCOVERY_RESPONSE 4 channel(s), head unit='AiPlay'
+     channel 1   av          stream_type=3
+     channel 4   input
+-> control    CHANNEL_OPEN_REQUEST
+<- control    CHANNEL_OPEN_RESPONSE      status=1 (FAIL)   ← the 0.2.0 acceptance test
+RESULT: handshake complete — receiver speaks Android Auto
+```
+
+The same session in the app: `adb logcat -s AiPlay:D`.
+
+### Head-unit layout without a head unit
+
+```sh
+adb shell wm size 1024x600 && adb shell wm density 160    # pretend to be the unit
+adb exec-out screencap -p > home.png
+adb shell wm size reset && adb shell wm density reset
 ```
 
 ## 3. What each test class covers
