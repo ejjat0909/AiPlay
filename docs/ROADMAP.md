@@ -14,7 +14,10 @@
 
 Acceptance: a real phone completes discovery **and** renders its UI on the head unit.
 
-- [ ] Video channel: `AVChannelSetup`, `AVChannelStart`, media frames, H.264 → `MediaCodec` → `SurfaceView`
+- [x] Video channel on the wire: open, setup, focus, start/stop, media + acks (0.2.0-alpha1, loopback-verified)
+- [x] H.264 → `MediaCodec` → `SurfaceView` (`ProjectionActivity`) — compiles; **not yet run on a device**
+- [ ] **Transport rework (blocks every real phone):** plain TCP, in-band TLS as the *client* via `SSL_HANDSHAKE`, encrypted frames. See PROTOCOL.md 2.2
+- [ ] **Bluetooth bootstrap for wireless AA** (phone is told the head unit's address over Bluetooth, then connects over Wi-Fi) — needed for the phone to find AiPlay at all
 - [ ] Media audio: `AudioTrack` 48 kHz stereo with ack cadence
 - [ ] Speech audio with media ducking
 - [ ] Touch input: `TouchEventData` → `MotionEvent`, coordinate mapping per display

@@ -36,12 +36,14 @@ The condition model (P1–P5) is documented in [PLAN.md §2](PLAN.md) and
 | --- | --- |
 | Capability audit | **working**, unit-tested |
 | Enable / repair Android Auto | **working** where a root shell exists, ADB recipe otherwise |
-| Wireless receiver: discovery, TLS, AA control plane | **implemented and unit-tested** (real TLS loopback handshake), not yet verified against a live phone |
-| Receiver: video / audio / touch channels | **not implemented** — milestone 0.2.0 |
+| Wireless receiver: discovery, TLS, AA control plane, **video channel** | **implemented and unit-tested** (loopback), not yet verified against a live phone. A real phone cannot connect yet: the transport differs from real Android Auto (see docs/PROTOCOL.md 2.2) |
+| Receiver: video channel + H.264 decode to screen | **implemented** (0.2.0-alpha1); on-device rendering is checked by `tools/device-test.sh`, not yet run |
+| Receiver: audio / touch / sensor channels | **not implemented** — rest of milestone 0.2.0 |
+| Real phone over Wi-Fi | **not possible yet**: needs the transport rework and a Bluetooth bootstrap (docs/PROTOCOL.md 2.2) |
 
-The receiver is honest about this: it labels itself *handshake only (experimental)* in the app
-and in its notification. It will let a phone find the unit and complete version negotiation and
-service discovery; it will not draw CarPlay-style projection yet.
+The receiver is honest about this: it is experimental. It completes version negotiation and service
+discovery and can show a video stream, but it has no touch, audio or sensor channels, so it cannot
+yet be used to navigate.
 
 ## Install
 

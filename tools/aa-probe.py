@@ -2,25 +2,27 @@
 """
 AiPlay receiver probe — speak real Android Auto to a head unit running AiPlay.
 
-This is the client (phone) side of docs/PROTOCOL.md: TLS, then the control exchange, then a
-channel open for whichever channel the head unit advertises. It prints every message in both
+This is the client (phone) side of docs/PROTOCOL.md: TLS, then the control exchange, then the
+video channel (open, setup, focus, start, an H.264 test clip, stop). It prints every message in both
 directions, so the receiver can be proven without a car:
 
     python3 tools/aa-probe.py 192.168.1.50
     python3 tools/aa-probe.py 192.168.1.50 --port 5277 --verbose
 
-Exit code 0 means the receiver completed version negotiation, service discovery and the channel
-open it was asked to perform. Standard library only.
+Exit code 0 means the receiver completed version negotiation and service discovery, accepted the
+video channel, and acked every picture of the test clip (use --no-video to stop after the open). Standard library only.
 
 Wire format (aasdk): [channel u8][flags u8][size u16 BE][payload], with a six-byte size field
 (size u16 + total u32) on the FIRST frame of a split message, and the message id as the first two
 bytes of the payload.
 """
 import argparse
+import os
 import socket
 import ssl
 import struct
 import sys
+import time
 
 # ---- channels, flags, message ids -----------------------------------------------------------
 
@@ -58,9 +60,36 @@ MESSAGE_NAMES = {
 }
 
 
+# AVChannelMessage.Enum (aasdk AVChannelMessageIdsEnum.proto) — channel-specific, control flag clear.
+AV_MEDIA_WITH_TIMESTAMP = 0x0000
+AV_MEDIA = 0x0001
+AV_SETUP_REQUEST = 0x8000
+AV_START_INDICATION = 0x8001
+AV_STOP_INDICATION = 0x8002
+AV_SETUP_RESPONSE = 0x8003
+AV_MEDIA_ACK = 0x8004
+AV_VIDEO_FOCUS_REQUEST = 0x8007
+AV_VIDEO_FOCUS_INDICATION = 0x8008
+AV_SETUP_OK = 2        # AVChannelSetupStatus.Enum: NONE=0, FAIL=1, OK=2
+FOCUS_FOCUSED = 1      # VideoFocusMode.Enum: NONE=0, FOCUSED=1, UNFOCUSED=2
+
+AV_NAMES = {
+    AV_MEDIA_WITH_TIMESTAMP: "MEDIA_WITH_TIMESTAMP", AV_MEDIA: "MEDIA",
+    AV_SETUP_REQUEST: "SETUP_REQUEST", AV_START_INDICATION: "START_INDICATION",
+    AV_STOP_INDICATION: "STOP_INDICATION", AV_SETUP_RESPONSE: "SETUP_RESPONSE",
+    AV_MEDIA_ACK: "MEDIA_ACK", AV_VIDEO_FOCUS_REQUEST: "VIDEO_FOCUS_REQUEST",
+    AV_VIDEO_FOCUS_INDICATION: "VIDEO_FOCUS_INDICATION",
+}
+
+DEFAULT_CLIP = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                            "test-720p30.h264")
+
+
 def message_name(channel, control, message_id):
     if control:
         return MESSAGE_NAMES.get(message_id, "UNKNOWN_0x%04X" % message_id)
+    if channel == VIDEO:
+        return AV_NAMES.get(message_id, "0x%04X" % message_id)
     return "0x%04X" % message_id
 
 
@@ -228,12 +257,114 @@ def describe(channel, control, message_id, payload):
     if control and message_id == AUTH_COMPLETE:
         values = {f: v for f, w, v in fields}
         return "status=%s" % values.get(1, "?")
+    if not control and channel == VIDEO:
+        values = {f: v for f, w, v in fields}
+        if message_id == AV_SETUP_RESPONSE:
+            configs = [v for f, w, v in fields if f == 3]
+            return "media_status=%s (%s) max_unacked=%s configs=%s" % (
+                values.get(1, "?"), "OK" if values.get(1) == AV_SETUP_OK else "NOT OK",
+                values.get(2, "?"), configs)
+        if message_id == AV_VIDEO_FOCUS_INDICATION:
+            return "focus_mode=%s (%s) unrequested=%s" % (
+                values.get(1, "?"), "FOCUSED" if values.get(1) == FOCUS_FOCUSED else "other",
+                values.get(2, 0))
+        if message_id == AV_MEDIA_ACK:
+            return "session=%s value=%s" % (values.get(1, "?"), values.get(2, "?"))
     return "%d field(s), %d byte(s)" % (len(fields), len(payload))
+
+
+# ---- H.264 ----------------------------------------------------------------------------------
+
+def split_access_units(data):
+    """Annex-B stream -> list of access units (SPS/PPS stay attached to the slice they precede).
+
+    One slice per picture is assumed, which is what the bundled clip uses (no sliced threads).
+    """
+    starts = []
+    i = 0
+    while True:
+        i = data.find(b"\x00\x00\x01", i)
+        if i < 0:
+            break
+        starts.append(i)
+        i += 3
+    units, begin = [], None
+    for index, position in enumerate(starts):
+        nal_type = data[position + 3] & 0x1F
+        # include a preceding zero byte if this was a four-byte start code
+        real_start = position - 1 if position > 0 and data[position - 1] == 0 else position
+        if begin is None:
+            begin = real_start
+        end = (starts[index + 1] - (1 if data[starts[index + 1] - 1] == 0 else 0)
+               if index + 1 < len(starts) else len(data))
+        if nal_type in (1, 5):          # a VCL NAL completes the access unit
+            units.append(data[begin:end])
+            begin = None
+    return units
 
 
 # ---- probe ----------------------------------------------------------------------------------
 
-def probe(host, port, timeout, verbose, device_name, open_channel):
+def stream_video(send, receive, clip_path, fast):
+    """Phone side of the video channel: setup, focus, start, frames, stop. True when all acked."""
+    with open(clip_path, "rb") as handle:
+        units = split_access_units(handle.read())
+    if not units:
+        print("     %s contains no H.264 pictures" % clip_path)
+        return False
+    print("     clip %s: %d picture(s)" % (os.path.basename(clip_path), len(units)))
+
+    send(VIDEO, False, AV_SETUP_REQUEST, pb_varint(1, 0))
+    channel, control, message_id, payload = receive()
+    fields = list(parse_fields(payload))
+    values = {f: v for f, w, v in fields}
+    if message_id != AV_SETUP_RESPONSE or values.get(1) != AV_SETUP_OK:
+        print("     video setup was not accepted")
+        return False
+    max_unacked = max(1, values.get(2, 1))
+
+    send(VIDEO, False, AV_VIDEO_FOCUS_REQUEST,
+         pb_varint(1, 0) + pb_varint(2, FOCUS_FOCUSED) + pb_varint(3, 1))
+    channel, control, message_id, payload = receive()
+    if message_id != AV_VIDEO_FOCUS_INDICATION or dict((f, v) for f, w, v in
+                                                       parse_fields(payload)).get(1) != FOCUS_FOCUSED:
+        print("     video focus was not granted")
+        return False
+
+    session = 1
+    send(VIDEO, False, AV_START_INDICATION, pb_varint(1, session) + pb_varint(2, 0))
+
+    outstanding = acked = 0
+    started = time.time()
+    # Per-frame lines would drown the output: print the first frame, then a summary.
+    for index, unit in enumerate(units):
+        while outstanding >= max_unacked:
+            ch, ctl, mid, body = receive(quiet=True)
+            if mid == AV_MEDIA_ACK:
+                outstanding -= 1
+                acked += 1
+        timestamp = index * 33333
+        send(VIDEO, False, AV_MEDIA_WITH_TIMESTAMP, struct.pack(">Q", timestamp) + unit,
+             quiet=index > 0)
+        outstanding += 1
+        if not fast:
+            delay = started + (index + 1) / 30.0 - time.time()
+            if delay > 0:
+                time.sleep(delay)
+    while outstanding > 0:
+        ch, ctl, mid, body = receive(quiet=True)
+        if mid == AV_MEDIA_ACK:
+            outstanding -= 1
+            acked += 1
+    send(VIDEO, False, AV_STOP_INDICATION)
+    elapsed = time.time() - started
+    print("     sent %d picture(s), %d acked, %.1fs (%.1f fps)"
+          % (len(units), acked, elapsed, len(units) / elapsed if elapsed else 0))
+    return acked == len(units)
+
+
+def probe(host, port, timeout, verbose, device_name, open_channel, send_video=True,
+          clip=DEFAULT_CLIP, fast=False):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -243,17 +374,20 @@ def probe(host, port, timeout, verbose, device_name, open_channel):
     sock = context.wrap_socket(raw)
     print("connected  : tls %s / %s" % (sock.version(), sock.cipher()[0]))
 
-    def send(channel, control, message_id, payload=b""):
+    def send(channel, control, message_id, payload=b"", quiet=False):
         sock.sendall(encode_message(channel, control, message_id, payload))
-        print("-> %-10s %-26s %d byte(s)"
-              % (CHANNEL_NAMES.get(channel, channel), message_name(channel, control, message_id),
-                 len(payload)))
+        if not quiet:
+            print("-> %-10s %-26s %d byte(s)"
+                  % (CHANNEL_NAMES.get(channel, channel),
+                     message_name(channel, control, message_id), len(payload)))
 
-    def receive():
+    def receive(quiet=False):
         channel, control, message_id, payload = recv_message(sock)
-        print("<- %-10s %-26s %s"
-              % (CHANNEL_NAMES.get(channel, channel), message_name(channel, control, message_id),
-                 describe(channel, control, message_id, payload)))
+        if not quiet:
+            print("<- %-10s %-26s %s"
+                  % (CHANNEL_NAMES.get(channel, channel),
+                     message_name(channel, control, message_id),
+                     describe(channel, control, message_id, payload)))
         return channel, control, message_id, payload
 
     ok = False
@@ -292,16 +426,19 @@ def probe(host, port, timeout, verbose, device_name, open_channel):
             target = video[0] if video else (channels[0][0] if channels else None)
         if target is None:
             print("     head unit advertised no channels to open")
-        else:
-            send(CONTROL, True, CHANNEL_OPEN_REQUEST, pb_varint(1, 1) + pb_varint(2, target))
-            channel, control, message_id, payload = receive()
-            if message_id == CHANNEL_OPEN_RESPONSE:
-                values = {f: v for f, w, v in parse_fields(payload)}
-                if values.get(1) == 0:
-                    print("     channel %d opened" % target)
-                else:
-                    print("     receiver refused channel %d (status %s) — expected until the "
-                          "video channel lands" % (target, values.get(1)))
+            return 1
+        # A phone sends ChannelOpenRequest on the channel it wants to open.
+        send(target, True, CHANNEL_OPEN_REQUEST, pb_varint(1, 0) + pb_varint(2, target))
+        channel, control, message_id, payload = receive()
+        values = {f: v for f, w, v in parse_fields(payload)} if message_id == CHANNEL_OPEN_RESPONSE else {}
+        if values.get(1) != 0:
+            print("     receiver refused channel %d (status %s)" % (target, values.get(1)))
+            return 1
+        print("     channel %d opened" % target)
+
+        if send_video and target == VIDEO:
+            if not stream_video(send, receive, clip, fast):
+                return 1
     finally:
         try:
             send(CONTROL, True, SHUTDOWN_REQUEST)
@@ -310,7 +447,9 @@ def probe(host, port, timeout, verbose, device_name, open_channel):
         sock.close()
 
     print()
-    print("RESULT: %s" % ("handshake complete — receiver speaks Android Auto"
+    print("RESULT: %s" % ("handshake complete, video channel streamed — receiver speaks Android "
+                          "Auto" if ok and send_video and open_channel in (None, VIDEO)
+                          else "handshake complete — receiver speaks Android Auto"
                           if ok else "handshake incomplete"))
     return 0 if ok else 1
 
@@ -323,10 +462,15 @@ def main():
     parser.add_argument("--name", default="AiPlay probe", help="device name sent to the receiver")
     parser.add_argument("--channel", type=int, default=None,
                         help="channel id to open (default: first video channel)")
+    parser.add_argument("--no-video", action="store_true",
+                        help="stop after the channel open; do not stream the test clip")
+    parser.add_argument("--clip", default=DEFAULT_CLIP, help="Annex-B H.264 file to stream")
+    parser.add_argument("--fast", action="store_true", help="send frames as fast as acks allow")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     try:
-        return probe(args.host, args.port, args.timeout, args.verbose, args.name, args.channel)
+        return probe(args.host, args.port, args.timeout, args.verbose, args.name, args.channel,
+                     send_video=not args.no_video, clip=args.clip, fast=args.fast)
     except (OSError, EOFError, ValueError) as error:
         print("FAILED: %s" % error)
         print("check: same Wi-Fi network, receiver started in the app, port %d not blocked"

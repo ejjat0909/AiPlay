@@ -136,6 +136,28 @@ public final class AaControl {
         }
     }
 
+    /**
+     * Reads a {@code ChannelOpenRequest}: {@code priority = 1, channel_id = 2}. Returns the
+     * channel id, or -1 when it is missing.
+     */
+    public static int parseChannelOpenRequest(byte[] payload) {
+        int channelId = -1;
+        ProtoReader reader = new ProtoReader(payload);
+        try {
+            while (reader.hasMore()) {
+                int tag = reader.readTag();
+                if (ProtoReader.field(tag) == 2 && ProtoReader.wireType(tag) == 0) {
+                    channelId = (int) reader.readVarint();
+                } else {
+                    reader.skip(ProtoReader.wireType(tag));
+                }
+            }
+        } catch (AaProtocolException ignored) {
+            // Truncated: report what was read so far.
+        }
+        return channelId;
+    }
+
     /** Parsed {@code ServiceDiscoveryRequest}. */
     public static final class ServiceDiscoveryRequest {
         public String deviceName = "";
@@ -180,10 +202,13 @@ public final class AaControl {
         public String swBuild = "aiplay";
         public String swVersion = "0.1.0";
 
+        // Only what the receiver can actually serve is advertised: a channel that is offered and
+        // then refused on open is worse for a phone than a channel that was never offered.
+        // 0.2.0 serves video; audio and input switch on as their channels land.
         public boolean advertiseVideo = true;
-        public boolean advertiseMediaAudio = true;
-        public boolean advertiseSpeechAudio = true;
-        public boolean advertiseInput = true;
+        public boolean advertiseMediaAudio = false;
+        public boolean advertiseSpeechAudio = false;
+        public boolean advertiseInput = false;
 
         public int videoWidth = 1280;
         public int videoHeight = 720;
@@ -200,16 +225,16 @@ public final class AaControl {
         java.util.List<ProtoWriter> channels() {
             java.util.List<ProtoWriter> channels = new java.util.ArrayList<ProtoWriter>(4);
             if (advertiseVideo) {
-                channels.add(descriptor(1, avChannel(STREAM_VIDEO, 0)));
+                channels.add(descriptor(AaChannel.VIDEO, avChannel(STREAM_VIDEO, 0)));
             }
             if (advertiseMediaAudio) {
-                channels.add(descriptor(2, avChannel(STREAM_AUDIO, AUDIO_MEDIA)));
+                channels.add(descriptor(AaChannel.MEDIA_AUDIO, avChannel(STREAM_AUDIO, AUDIO_MEDIA)));
             }
             if (advertiseSpeechAudio) {
-                channels.add(descriptor(3, avChannel(STREAM_AUDIO, AUDIO_SPEECH)));
+                channels.add(descriptor(AaChannel.SPEECH_AUDIO, avChannel(STREAM_AUDIO, AUDIO_SPEECH)));
             }
             if (advertiseInput) {
-                channels.add(inputDescriptor(4));
+                channels.add(inputDescriptor(AaChannel.INPUT));
             }
             return channels;
         }

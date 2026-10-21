@@ -2,6 +2,41 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha1] — 2026-10-21
+
+First step of 0.2.0 (projection): the video channel. **Not yet usable with a real phone** — see
+"Known gap".
+
+### Added
+
+* **Video channel** (`AaAv`, `AaSession`): `ChannelOpenRequest` on the video channel is answered `OK`
+  on that channel, then `SETUP_REQUEST` → `SETUP_RESPONSE` (OK, max_unacked 1, config 0),
+  `VIDEO_FOCUS_REQUEST` → `FOCUSED`, `START`/`STOP`, and every media picture is delivered to a
+  `VideoSink` and acked. Large pictures survive split framing.
+* **Decoder and screen:** `VideoDecoder` (H.264 Annex-B → `MediaCodec` → `Surface`; remembers SPS/PPS,
+  waits for an IDR) and `ProjectionActivity` (letterboxed 16:9 `SurfaceView`). `H264` helper finds
+  SPS/PPS/IDR in a chunk.
+* **Probe streams a clip:** `tools/aa-probe.py` now plays the phone's side of the video channel with
+  `tools/fixtures/test-720p30.h264` (3 s, 90 pictures, 258 KB). `device-test.sh` additionally checks
+  that a picture was rendered and saves a mid-stream screenshot to `build/device-test-video.png`.
+* 22 new tests (85 total): wire vectors, session routing, split framing, H.264 NAL scanning.
+
+### Fixed
+
+* **Channel ids in service discovery** were 1–4 and did not match the frame channel ids
+  (`AaChannel`: video 3, media audio 4, …). Now they do.
+* **Channel open** is answered on the channel it arrived on (a phone sends it there), not always on
+  control. A control-channel request is still accepted.
+* Only channels the receiver can serve are advertised (video). Audio/input descriptors exist but are
+  off until those channels are built.
+
+### Known gap (found while verifying against aasdk)
+
+AiPlay runs a TLS *server* on the TCP socket. Real Android Auto uses **plain TCP with TLS inside the
+protocol (`SSL_HANDSHAKE`), the head unit being the TLS client**. The tests and probe agree with
+AiPlay, not with a phone, so a real phone cannot connect yet. Wireless AA also needs a Bluetooth
+bootstrap. Both are roadmap items; details in `docs/PROTOCOL.md` 2.2.
+
 ## [0.1.5] — 2026-10-21
 
 Clean-up from the first green emulator run (0.1.4 passed; two log lines looked wrong).

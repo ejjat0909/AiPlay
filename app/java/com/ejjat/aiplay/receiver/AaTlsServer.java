@@ -164,6 +164,7 @@ public final class AaTlsServer {
                             Diag.log("receiver", message);
                         }
                     }, discovery);
+            session.setVideoSink(ProjectionHub.get(context));
             session.begin();
 
             byte[] buffer = new byte[8192];

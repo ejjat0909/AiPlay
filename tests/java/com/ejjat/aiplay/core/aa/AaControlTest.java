@@ -46,6 +46,9 @@ public class AaControlTest {
         config.videoWidth = 1280;
         config.videoHeight = 720;
         config.videoFps = 30;
+        config.advertiseMediaAudio = true;
+        config.advertiseSpeechAudio = true;
+        config.advertiseInput = true;
 
         byte[] payload = AaControl.serviceDiscoveryResponse(config);
 
@@ -78,7 +81,7 @@ public class AaControlTest {
         assertTrue(leftHandDrive);
         assertEquals(4, channels.size());
 
-        // Channel 1: video. channel_id = 1, av_channel.stream_type = VIDEO(3), video_configs[0].
+        // Video: channel_id = AaChannel.VIDEO (3), av_channel.stream_type = VIDEO(3), video_configs[0].
         ProtoReader video = new ProtoReader(channels.get(0));
         int channelId = -1;
         int streamType = -1;
@@ -126,7 +129,7 @@ public class AaControlTest {
                     break;
             }
         }
-        assertEquals(1, channelId);
+        assertEquals(AaChannel.VIDEO, channelId);
         assertEquals(AaControl.STREAM_VIDEO, streamType);
         assertEquals(2, resolution); // 720p
         assertEquals(1, fps);        // 30
@@ -201,6 +204,38 @@ public class AaControlTest {
             }
         }
         assertEquals(1280, touchWidth);
+    }
+
+    @Test
+    public void defaultDiscoveryOffersOnlyTheVideoChannel() throws Exception {
+        byte[] payload = AaControl.serviceDiscoveryResponse(new AaControl.ServiceDiscoveryConfig());
+        ProtoReader reader = new ProtoReader(payload);
+        List<Integer> ids = new ArrayList<Integer>();
+        while (reader.hasMore()) {
+            int tag = reader.readTag();
+            if (ProtoReader.field(tag) == 1) {
+                ProtoReader channel = new ProtoReader(reader.readBytes());
+                while (channel.hasMore()) {
+                    int channelTag = channel.readTag();
+                    if (ProtoReader.field(channelTag) == 1) {
+                        ids.add((int) channel.readVarint());
+                    } else {
+                        channel.skip(ProtoReader.wireType(channelTag));
+                    }
+                }
+            } else {
+                reader.skip(ProtoReader.wireType(tag));
+            }
+        }
+        assertEquals(1, ids.size());
+        assertEquals(AaChannel.VIDEO, (int) ids.get(0));
+    }
+
+    @Test
+    public void parsesChannelOpenRequest() {
+        assertEquals(3, AaControl.parseChannelOpenRequest(
+                new ProtoWriter().varint(1, 0).varint(2, 3).toByteArray()));
+        assertEquals(-1, AaControl.parseChannelOpenRequest(new byte[0]));
     }
 
     @Test

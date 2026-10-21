@@ -9,8 +9,10 @@
 #   ./tools/device-test.sh -s emulator-5554      # pick a device
 #   ./tools/device-test.sh --apk x.apk --no-install
 #
-# Exit code 0 means the receiver completed version negotiation, service discovery and answered
-# the channel open. A refused channel open is expected until the video channel exists.
+# Exit code 0 means the receiver completed version negotiation and service discovery, accepted the
+# video channel, acked every picture of the test clip, AND the device decoded and rendered a
+# picture (logged as "video: first picture rendered"). A screenshot taken mid-stream is saved to
+# build/device-test-video.png so the picture can be looked at, not just logged.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -99,9 +101,15 @@ echo "listening"
 
 echo "== probe =="
 PROBE_STATUS=2
+SHOT="$ROOT/build/device-test-video.png"
+rm -f "$SHOT"
 if [ -f "$ROOT/tools/aa-probe.py" ]; then
+  # The clip is 3 s at 30 fps: grab the screen while it is playing.
+  ( sleep 2; "${ADB[@]}" exec-out screencap -p > "$SHOT" 2>/dev/null ) &
+  SHOT_PID=$!
   python3 "$ROOT/tools/aa-probe.py" 127.0.0.1 --port "$PORT"
   PROBE_STATUS=$?
+  wait "$SHOT_PID" 2>/dev/null
 else
   echo "tools/aa-probe.py missing" >&2
 fi
@@ -114,5 +122,25 @@ echo
 echo "== report =="
 "${ADB[@]}" shell ls -l "/sdcard/Android/data/$PKG/files/reports/" 2>/dev/null | tail -5
 echo
-echo "probe exit: $PROBE_STATUS  (0 = receiver speaks Android Auto)"
-exit "$PROBE_STATUS"
+echo "== render =="
+RENDER_STATUS=0
+if [ "$PROBE_STATUS" = "0" ]; then
+  if "${ADB[@]}" logcat -d -v brief -s AiPlay:D | grep -q "video: first picture rendered"; then
+    echo "OK: the device decoded and rendered a picture"
+    [ -s "$SHOT" ] && echo "screenshot: $SHOT"
+  else
+    echo "FAIL: the probe streamed video but no picture was rendered on the device." >&2
+    echo "  - did ProjectionActivity open? (background activity starts are blocked on Android 10+)" >&2
+    echo "  - look for 'video:' lines above: decoder errors are logged there" >&2
+    RENDER_STATUS=4
+  fi
+else
+  echo "skipped (the probe did not complete)"
+fi
+
+echo
+echo "probe exit: $PROBE_STATUS  render exit: $RENDER_STATUS  (0/0 = receiver speaks Android Auto and shows video)"
+if [ "$PROBE_STATUS" != "0" ]; then
+  exit "$PROBE_STATUS"
+fi
+exit "$RENDER_STATUS"

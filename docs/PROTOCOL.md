@@ -6,7 +6,7 @@ left to 0.2.0. Anything not listed here is **not** implemented.
 ## 1. Layering
 
 ```
-TCP :5277  →  TLS 1.2/1.3  →  AA frame  →  protobuf control message
+TCP :5277  →  TLS 1.2/1.3  →  AA frame  →  protobuf control message   (AiPlay today; see 2.2: a real phone uses plain TCP with TLS inside the frames)
 ```
 
 Discovery is mDNS (`_androidauto._tcp`). USB accessory mode (AOA) is a 0.3.0 transport.
@@ -55,6 +55,26 @@ message id inside the protobuf. Every "handshake complete" before 0.1.3 was AiPl
 AiPlay. The 0.1.3 codec follows the aasdk format above, and the probe was rewritten to match,
 so the loopback test now exercises the real contract.
 
+### 2.2 Correction: the transport is not TLS-on-TCP (found while building 0.2.0)
+
+Checking the video messages against aasdk's sources also showed how the TLS layer really works,
+and AiPlay's does not match it. In aasdk (`Messenger/Cryptor.cpp`, `Transport/SSLWrapper.cpp`):
+
+* the TCP connection carries **plain AA frames**; there is no TLS on the socket;
+* TLS 1.2 runs **inside the protocol**, over memory BIOs: handshake records travel in
+  `SSL_HANDSHAKE` (`0x0003`) control messages, and once it completes, later frames are sent with
+  the `ENCRYPTED` flag and a TLS-protected payload;
+* the **head unit is the TLS client** (`SSL_set_connect_state`, `TLS_client_method`) and the
+  phone is the TLS server.
+
+AiPlay 0.1.x–0.2.0-alpha1 instead runs a TLS *server* directly on tcp 5277. That is self-consistent
+with `tools/aa-probe.py` and the JVM tests (the same trap as 0.1.0–0.1.2's framing), but **a real
+phone would send plain AA bytes into a TLS server and the handshake would fail**. The video channel
+below is independent of the transport and is verified; the transport is not. Replacing it
+(in-band TLS with a `SSLEngine` in client mode, plain TCP, encrypted frames) is the next milestone,
+and the wireless path also needs a Bluetooth bootstrap before the phone knows where to connect
+(see ROADMAP).
+
 ## 3. Message identifiers (verified)
 
 Control-channel ids, from `aasdk_proto/ControlMessageIdsEnum.proto` (f1xpl/aasdk, GPL-3.0):
@@ -67,7 +87,7 @@ Control-channel ids, from `aasdk_proto/ControlMessageIdsEnum.proto` (f1xpl/aasdk
 | `0x0004` | `AUTH_COMPLETE` | **sent** with `status = OK` |
 | `0x0005` | `SERVICE_DISCOVERY_REQUEST` | parsed, logged |
 | `0x0006` | `SERVICE_DISCOVERY_RESPONSE` | **sent** with channel descriptors |
-| `0x0007` | `CHANNEL_OPEN_REQUEST` | parsed; answered `FAIL` until a channel exists |
+| `0x0007` | `CHANNEL_OPEN_REQUEST` | sent by the phone **on the channel it wants**; answered on that channel: `OK` for video, `FAIL` otherwise |
 | `0x0008` | `CHANNEL_OPEN_RESPONSE` | **sent** |
 | `0x000b`/`0x000c` | `PING_REQUEST` / `PING_RESPONSE` | answered |
 | `0x000f`/`0x0010` | `SHUTDOWN_REQUEST` / `RESPONSE` | acknowledged |
@@ -115,38 +135,61 @@ message AVChannel {
 message ChannelOpenResponse { required Status.Enum status = 1; }
 ```
 
-AiPlay's advertised channels (0.1.0): video `1280×720@30`, media audio `48 kHz/16/2`,
-speech audio `48 kHz/16/2`, input with a minimal key set and a touch area matching the
-display. See `AaControl.ServiceDiscoveryConfig`.
+Channel ids in the descriptors are the same numbers the frames use (`AaChannel`: input 1,
+sensor 2, video 3, media audio 4, speech audio 5, …). 0.1.x numbered its descriptors 1–4, which
+did not match the frame channel ids; 0.2.0 fixes that.
 
-## 5. Handshake as implemented
+AiPlay advertises **only what it can serve**: since 0.2.0 that is the video channel,
+`1280×720@30` (`AaControl.ServiceDiscoveryConfig`). Audio and input are still implemented as
+descriptors but switched off, so a phone is never offered a channel that is then refused.
+
+```proto
+message ChannelOpenRequest { int32 priority = 1; int32 channel_id = 2; }
+message AVChannelSetupRequest  { uint32 config_index = 1; }
+message AVChannelSetupResponse { required AVChannelSetupStatus.Enum media_status = 1;  // FAIL = 1, OK = 2
+                                 required uint32 max_unacked = 2; repeated uint32 configs = 3; }
+message AVChannelStartIndication { int32 session = 1; uint32 config = 2; }
+message AVMediaAckIndication { required int32 session = 1; required uint32 value = 2; }
+message VideoFocusRequest    { int32 disp_index = 1; VideoFocusMode.Enum focus_mode = 2;  // FOCUSED = 1
+                               VideoFocusReason.Enum focus_reason = 3; }
+message VideoFocusIndication { VideoFocusMode.Enum focus_mode = 1; bool unrequested = 2; }
+```
+
+Media: `MEDIA_WITH_TIMESTAMP` (`0x0000`) is `[timestamp u64 BE µs][Annex-B H.264]`; `MEDIA`
+(`0x0001`) is the H.264 alone. Both travel on the video channel with the control flag clear.
+
+## 5. Session as implemented (0.2.0-alpha1)
 
 ```
 head unit                                phone
-   │ TLS accept                                │
-   │◀────────────── ClientHello ───────────────│
-   │─────────────── ServerHello + cert ───────▶│
-   │──── VERSION_REQUEST (1.6) ───────────────▶│
+   │──── VERSION_REQUEST (1.6) ───────────────▶│   (inside AiPlay's TLS-on-TCP, see 2.2)
    │◀──────────── VERSION_RESPONSE ────────────│
    │──── AUTH_COMPLETE (OK) ──────────────────▶│
    │◀──────── SERVICE_DISCOVERY_REQUEST ───────│
-   │──── SERVICE_DISCOVERY_RESPONSE ──────────▶│
-   │◀──────── CHANNEL_OPEN_REQUEST ────────────│
-   │──── CHANNEL_OPEN_RESPONSE (FAIL) ────────▶│
+   │──── SERVICE_DISCOVERY_RESPONSE (video) ──▶│
+   │◀──── CHANNEL_OPEN_REQUEST   [video ch] ────│
+   │──── CHANNEL_OPEN_RESPONSE (OK) [video ch] ▶│
+   │◀──── SETUP_REQUEST (config 0) ─────────────│
+   │──── SETUP_RESPONSE (OK, max_unacked 1, [0]) ▶│
+   │◀──── VIDEO_FOCUS_REQUEST (FOCUSED) ────────│
+   │──── VIDEO_FOCUS_INDICATION (FOCUSED) ─────▶│
+   │◀──── START_INDICATION (session, config) ───│
+   │◀──── MEDIA_WITH_TIMESTAMP … ───────────────│   H.264, one picture per message
+   │──── MEDIA_ACK (session, 1) ────────────────▶│   one ack per picture
+   │◀──── STOP_INDICATION ───────────────────────│
 ```
 
-The last line is intentional: 0.1.0 has no video/audio/input channel to hand out, so it
-refuses rather than opening a channel it cannot serve. The session log records the
-refusal, which is exactly the evidence needed to implement the channels in 0.2.0.
+Verified by `AaSessionTest` (each step, including split framing of a 50 kB picture),
+`AaAvTest` (hand-computed wire vectors), and `tools/aa-probe.py` against `tools/AaHarness.java`:
+90 pictures sent, 90 acked, received stream **byte-identical** to the clip and decodable.
+Decoding to a screen is `receiver/VideoDecoder.java` (`MediaCodec` → `SurfaceView`), exercised only
+by `tools/device-test.sh` on a device.
 
-Verified by `AaSessionTest.completesRealTlsHandshakeAndControlExchange`: a loopback TLS
-client performs the full exchange above against the real session object.
-
-## 6. Not implemented (0.2.0)
+## 6. Not implemented
 
 | Channel | Needs |
 | --- | --- |
-| Video | `AVChannelSetupRequest/Response`, `AVChannelStartIndication`, media frames with timestamps, H.264 → `MediaCodec` → `Surface` |
+| Transport | in-band TLS (`SSL_HANDSHAKE`, head unit = TLS client), plain TCP, encrypted frames; Bluetooth bootstrap for wireless |
 | Media audio | `AVChannelSetup` + `AudioTrack` 48 kHz stereo, ack cadence |
 | Speech audio | second `AudioTrack`, ducking |
 | Input | `TouchEventData` (absolute, normalised) → `MotionEvent`, `ButtonEventsData` |

@@ -2,6 +2,7 @@ import com.ejjat.aiplay.core.aa.AaControl;
 import com.ejjat.aiplay.core.aa.AaSession;
 
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
@@ -19,15 +20,19 @@ import javax.net.ssl.SSLSocket;
  * <pre>
  *   ./tools/test.sh                                  # builds core + a test keystore
  *   javac -cp build/test/classes -d build/harness tools/AaHarness.java
- *   java -cp build/test/classes:build/harness AaHarness 5277 build/test/keystore.p12
+ *   java -cp build/test/classes:build/harness AaHarness 5277 build/test/keystore.p12 [video.h264]
  *   python3 tools/aa-probe.py 127.0.0.1
  * </pre>
+ *
+ * <p>With a fourth argument the harness writes every received video frame to that file, which is
+ * how the probe's clip is checked for a byte-for-byte round trip.</p>
  */
 public final class AaHarness {
 
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 5277;
         String keystore = args.length > 1 ? args[1] : "build/test/keystore.p12";
+        final String dump = args.length > 2 ? args[2] : null;
 
         KeyStore store = KeyStore.getInstance("PKCS12");
         InputStream input = new FileInputStream(keystore);
@@ -53,7 +58,7 @@ public final class AaHarness {
             Thread worker = new Thread(new Runnable() {
                 @Override
                 public void run() {
-                    serve(socket);
+                    serve(socket, dump);
                 }
             }, "harness-session");
             worker.setDaemon(true);
@@ -61,7 +66,7 @@ public final class AaHarness {
         }
     }
 
-    private static void serve(SSLSocket socket) {
+    private static void serve(SSLSocket socket, String dump) {
         try {
             socket.setSoTimeout(30000);
             socket.startHandshake();
@@ -81,9 +86,45 @@ public final class AaHarness {
                     System.out.println("    " + message);
                 }
             }, config);
+            final FileOutputStream video = dump == null ? null : new FileOutputStream(dump);
+            session.setVideoSink(new AaSession.VideoSink() {
+                @Override
+                public void onVideoSetup(int configIndex) {
+                }
+
+                @Override
+                public void onVideoStart(int session, int config) {
+                }
+
+                @Override
+                public void onVideoFrame(long timestampMicros, byte[] data, int offset, int length) {
+                    try {
+                        if (video != null) {
+                            video.write(data, offset, length);
+                        }
+                    } catch (java.io.IOException error) {
+                        System.out.println("dump failed: " + error);
+                    }
+                }
+
+                @Override
+                public void onVideoStop() {
+                    try {
+                        if (video != null) {
+                            video.close();
+                        }
+                    } catch (java.io.IOException ignored) {
+                        // nothing useful to do
+                    }
+                }
+
+                @Override
+                public void onVideoFocus(boolean focused) {
+                }
+            });
             session.begin();
 
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[65536];
             while (session.pump(buffer) >= 0) {
                 // keep reading until the peer closes
             }

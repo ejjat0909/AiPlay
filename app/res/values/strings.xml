@@ -3,6 +3,10 @@
     <string name="app_name">AiPlay</string>
     <string name="probing">Checking this unit…</string>
 
+    <!-- Projection -->
+    <string name="projection_waiting">Waiting for the phone\'s video…</string>
+    <string name="projection_ended">The phone stopped projecting</string>
+
     <!-- Home -->
     <string name="capabilities">Capabilities</string>
     <string name="capabilities_hint">probed on this device</string>
@@ -13,7 +17,7 @@
     <string name="status_hidden_title">Android Auto is unreachable</string>
     <string name="status_hidden_body">Android Auto is enabled, but this ROM hides its launcher entry or withholds a permission. Repair re-installs it for user 0 and grants location.</string>
     <string name="status_receiver_title">No Android Auto package</string>
-    <string name="status_receiver_body">There is nothing to enable: this ROM never shipped Android Auto. AiPlay can act as the head unit itself — experimental, handshake only in this version.</string>
+    <string name="status_receiver_body">There is nothing to enable: this ROM never shipped Android Auto. AiPlay can act as the head unit itself — experimental: 0.2.0 shows a phone\'s video, but input and audio are not built yet.</string>
     <string name="status_no_gms_title">No Android Auto, no Play services</string>
     <string name="status_no_gms_body">This ROM has neither Android Auto nor Google Play services. Only AiPlay\'s own receiver can help, and it is experimental.</string>
 
@@ -72,7 +76,7 @@
     <string name="toast_receiver_started">Receiver starting</string>
 
     <!-- Receiver -->
-    <string name="receiver_running">Receiver listening on tcp %1$d · handshake only (experimental)</string>
+    <string name="receiver_running">Receiver listening on tcp %1$d · video only (experimental)</string>
     <string name="receiver_stopped">Receiver stopped</string>
     <string name="notification_channel">Receiver</string>
     <string name="notification_channel_desc">Shows when the AiPlay receiver is listening for a phone.</string>

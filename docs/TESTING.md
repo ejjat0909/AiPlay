@@ -109,8 +109,9 @@ adb shell wm size reset && adb shell wm density reset
 | --- | --- | --- |
 | `aa.AaFrameCodecTest` | 10 | Frame header endianness, byte-at-a-time TCP fragmentation, trailing partial frame, 64 KiB payload cap, out-of-bounds feed, unknown-id naming |
 | `aa.ProtoTest` | 6 | Varint encoding vs protobuf reference vectors, nested messages, truncated varints, overlong length-delimited fields, fixed-width skip |
-| `aa.AaControlTest` | 7 | Exact wire bytes for version/auth/channel-open, service-discovery channel descriptors (video 720p30, audio 48k/16/2, touch 1280×720), tolerant parsing of garbage |
-| `aa.AaSessionTest` | 8 | Handshake ordering, idempotent `begin()`, refusal of channel open, ping, unknown-frame reporting, peer close, **real TLS loopback exchange** |
+| `aa.AaControlTest` | 10 | Exact wire bytes for version/auth/channel-open, service-discovery channel descriptors (video 720p30, audio 48k/16/2, touch 1280×720), tolerant parsing of garbage |
+| `aa.AaSessionTest` | 16 | Handshake ordering, idempotent `begin()`, channel open on its own channel / refusal of unserved channels, video setup/focus/start/stop, per-frame acks, split-framed 50 kB picture, ping, unknown-frame reporting, peer close, **real TLS loopback exchange** |
+| `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |
 | `PrivilegePlanTest` | 5 | The exact `pm` commands, `su -c` joining, recipe completeness |
 | `SessionStateMachineTest` | 7 | Legal/illegal transitions, idempotent events, failure recovery |
