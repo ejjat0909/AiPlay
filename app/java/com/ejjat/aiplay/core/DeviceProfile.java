@@ -45,6 +45,8 @@ public final class DeviceProfile {
 
     public int receiverPort = 5277;
     public boolean receiverPortFree;
+    /** True when AiPlay's own receiver is holding the port — not a conflict, that is the goal. */
+    public boolean receiverRunning;
 
     public int screenWidthDp;
     public int screenHeightDp;
@@ -92,8 +94,9 @@ public final class DeviceProfile {
                 bluetooth ? Capability.State.OK : Capability.State.WARN,
                 bluetooth ? "supported" : "not reported"));
         list.add(new Capability(Capability.Id.RECEIVER_PORT,
-                receiverPortFree ? Capability.State.OK : Capability.State.WARN,
-                "tcp " + receiverPort + (receiverPortFree ? " free" : " in use")));
+                (receiverRunning || receiverPortFree) ? Capability.State.OK : Capability.State.WARN,
+                receiverRunning ? "listening (own receiver) tcp " + receiverPort
+                        : "tcp " + receiverPort + (receiverPortFree ? " free" : " in use")));
         return list;
     }
 

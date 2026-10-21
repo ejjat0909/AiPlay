@@ -138,6 +138,21 @@ public class ReadinessEngineTest {
         assertEquals(Capability.Id.GEARHEAD_LAUNCHER, verdict.capabilities.get(2).id);
     }
 
+    /** 0.1.1 reported "tcp 5277 in use" for AiPlay's own listener; that is the goal, not a fault. */
+    @Test
+    public void ownReceiverHoldingThePortIsNotAConflict() {
+        DeviceProfile profile = base();
+        profile.receiverPort = 5277;
+        profile.receiverPortFree = false;
+        profile.receiverRunning = true;
+        assertEquals(Capability.State.OK,
+                find(ReadinessEngine.evaluate(profile), Capability.Id.RECEIVER_PORT).state);
+
+        profile.receiverRunning = false;
+        assertEquals(Capability.State.WARN,
+                find(ReadinessEngine.evaluate(profile), Capability.Id.RECEIVER_PORT).state);
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsNullProfile() {
         ReadinessEngine.evaluate(null);

@@ -13,7 +13,7 @@ public final class AiPlayApp extends Application {
         super.onCreate();
         Prefs.init(this);
         Diag.installCrashHandler();
-        Diag.log("app", "AiPlay " + BuildConfig.VERSION_NAME + " started on API "
+        Diag.log("app", "AiPlay " + Diag.version(this) + " started on API "
                 + android.os.Build.VERSION.SDK_INT);
     }
 }

@@ -1,6 +1,7 @@
 package com.ejjat.aiplay.device;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
@@ -17,6 +18,12 @@ public final class PrivilegedShell {
 
     private static final int TIMEOUT_SECONDS = 12;
     private static volatile Boolean rootCache;
+
+    /** Every location a real su binary has shipped in; a missing file means "no root", cheaply. */
+    private static final String[] SU_PATHS = {
+            "/system/bin/su", "/system/xbin/su", "/sbin/su", "/su/bin/su",
+            "/system/sbin/su", "/vendor/bin/su", "/system/bin/failsafe/su"
+    };
 
     private PrivilegedShell() {
     }
@@ -50,6 +57,13 @@ public final class PrivilegedShell {
         if (cached != null) {
             return cached.booleanValue();
         }
+        if (!suBinaryExists()) {
+            // 0.1.1 ran `su` unconditionally, so every report carried a 14-line
+            // IOException: error=2 stack trace for a phone that simply has no su.
+            rootCache = Boolean.FALSE;
+            Diag.log("shell", "su probe: no su binary (" + SU_PATHS.length + " paths checked)");
+            return false;
+        }
         boolean granted = false;
         try {
             Result result = exec(new String[]{"su", "-c", "id"}, 3000);
@@ -58,8 +72,21 @@ public final class PrivilegedShell {
             granted = false;
         }
         rootCache = Boolean.valueOf(granted);
-        Diag.log("shell", "su probe: " + (granted ? "granted" : "unavailable"));
+        Diag.log("shell", "su probe: " + (granted ? "granted" : "present but denied"));
         return granted;
+    }
+
+    private static boolean suBinaryExists() {
+        for (String path : SU_PATHS) {
+            try {
+                if (new File(path).exists()) {
+                    return true;
+                }
+            } catch (RuntimeException ignored) {
+                // a broken path entry must not abort the probe
+            }
+        }
+        return false;
     }
 
     public static Result runAsRoot(String script) {

@@ -10,6 +10,7 @@ import android.util.DisplayMetrics;
 import android.view.WindowManager;
 
 import com.ejjat.aiplay.core.DeviceProfile;
+import com.ejjat.aiplay.receiver.AaReceiverService;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -76,7 +77,10 @@ public final class CapabilityProbe {
         profile.screenHeightDp = Math.round(metrics.heightPixels / metrics.density);
 
         profile.receiverPort = Prefs.receiverPort();
-        profile.receiverPortFree = portFree(profile.receiverPort);
+        profile.receiverRunning = AaReceiverService.isRunning();
+        // Bind only when we are not the ones holding it: 0.1.1 reported "in use" for its own
+        // listener, which read like a conflict in every report.
+        profile.receiverPortFree = !profile.receiverRunning && portFree(profile.receiverPort);
 
         profile.suAvailable = PrivilegedShell.hasRoot();
         profile.suDetail = profile.suAvailable ? "su granted" : "no su binary";

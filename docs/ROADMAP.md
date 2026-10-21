@@ -7,7 +7,7 @@
 - [x] Splash, home, setup, diagnostics, settings
 - [x] AA control plane: framing, version, auth, service discovery, ping
 - [x] mDNS advertisement + TLS listener
-- [x] 57 JVM tests, including a real TLS loopback handshake
+- [x] 58 JVM tests, including a real TLS loopback handshake
 - [x] 217 KB APK, no dependencies
 
 ## 0.2.0 — Projection

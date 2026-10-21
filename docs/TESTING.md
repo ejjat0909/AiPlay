@@ -8,7 +8,7 @@ README maps to a row here.
 | Level | Scope | Tool | Result |
 | --- | --- | --- | --- |
 | L0 | `core/` has no Android dependency | `grep` + separate `javac` | **pass** |
-| L1 | Pure logic unit tests | JUnit 4 on a desktop JVM | **57 / 57 pass** |
+| L1 | Pure logic unit tests | JUnit 4 on a desktop JVM | **58 / 58 pass** |
 | L2 | Frame codec contract (fragmentation, truncation, caps) | JUnit 4 | **pass** |
 | L3 | Readiness matrix P1–P5 incl. contradictory profiles | JUnit 4 | **pass** |
 | L4 | APK static verification | `aapt2`, `apksigner`, `dexdump` | **pass** |
@@ -34,7 +34,7 @@ README maps to a row here.
 JUnit version 4.13.2
 .....................................................
 Time: 1.242
-OK (57 tests)
+OK (58 tests)
 ```
 
 ## 3. What each test class covers

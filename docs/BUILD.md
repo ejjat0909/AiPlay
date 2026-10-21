@@ -32,7 +32,9 @@ build/sources.txt          exact javac inputs
 ```
 
 The script runs six steps: `aapt2 compile`, `aapt2 link`, `javac`, `d8`, package +
-`zipalign`, `apksigner`. Signing uses `build/aiplay-debug.jks`, generated on first run
+`zipalign`, `apksigner`. `BuildConfig.java` is generated into `build/gen/` from the
+manifest version — it is deliberately not committed, because a stale copy is how 0.1.1
+shipped a report header that still said `0.1.0 (1)`. Signing uses `build/aiplay-debug.jks`, generated on first run
 (password `aiplay`) — **replace it for distribution**.
 
 ## 3. Release signing
@@ -54,7 +56,7 @@ no release key: a keystore in a public repository is not a secret.
 ```
 
 Generates a throwaway TLS keystore with `keytool`, compiles `core/` and `tests/` against
-the plain JDK, and runs 57 JUnit 4 tests. No Android SDK required beyond the JDK.
+the plain JDK, and runs 58 JUnit 4 tests. No Android SDK required beyond the JDK.
 
 ## 5. Icons
 
