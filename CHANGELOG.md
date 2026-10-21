@@ -2,6 +2,26 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.1.4] — 2026-10-21
+
+First run on an emulator (API 34, `sdk_gphone64_arm64`). The receiver worked; the script that
+was supposed to start it did not.
+
+### Fixed
+
+* **`device-test.sh` could not start the receiver.** `AaReceiverService` is `exported="false"`
+  (correctly), so `adb shell am start-foreground-service` is refused and the script then probed a
+  dead port. The launcher activity is exported, so the app now starts its own receiver when it is
+  launched with `--ez aiplay.start_receiver true`, and the script waits for the port to accept a
+  connection before probing — with an explicit message instead of an SSL EOF.
+* **Emulator `gearhead` is a stub.** `1.2.531830-stub` is installed and enabled in the
+  `google_apis` images but cannot project; the capability row now says so (WARN) instead of OK.
+
+### Verified
+
+* Full control exchange on an emulator: TLS 1.2, version 1.6, auth, service discovery
+  (193-byte response, 4 channels), ping, channel open answered, clean shutdown.
+
 ## [0.1.3] — 2026-10-21
 
 **The framing was wrong.** Found while building the test rig for the video channel.

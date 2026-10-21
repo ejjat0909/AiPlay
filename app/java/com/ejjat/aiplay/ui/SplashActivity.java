@@ -9,6 +9,7 @@ import android.view.View;
 
 import com.ejjat.aiplay.device.Diag;
 import com.ejjat.aiplay.device.Prefs;
+import com.ejjat.aiplay.receiver.AaReceiverService;
 import com.ejjat.aiplay.ui.view.SplashView;
 
 /**
@@ -16,6 +17,16 @@ import com.ejjat.aiplay.ui.view.SplashView;
  * A watchdog guarantees the driver never gets stuck here.
  */
 public final class SplashActivity extends Activity {
+
+    /**
+     * Test hook. {@code AaReceiverService} is not exported (correctly), so {@code adb shell am
+     * start-foreground-service} is refused. The launcher activity is exported, so a rig can ask
+     * the app to start the receiver itself:
+     *
+     * <pre>adb shell am start -n com.ejjat.aiplay/.ui.SplashActivity \
+     *       --ez aiplay.start_receiver true</pre>
+     */
+    public static final String EXTRA_START_RECEIVER = "aiplay.start_receiver";
 
     private static final long WARM_MS = 700L;
     private static final long COLD_MS = 1600L;
@@ -28,6 +39,11 @@ public final class SplashActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Ui.immersive(this);
+
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_START_RECEIVER, false)) {
+            Diag.log("splash", "start_receiver extra: starting the receiver");
+            AaReceiverService.start(this);
+        }
 
         if (!Prefs.showSplash()) {
             goHome();

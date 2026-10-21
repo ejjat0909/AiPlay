@@ -138,6 +138,20 @@ public class ReadinessEngineTest {
         assertEquals(Capability.Id.GEARHEAD_LAUNCHER, verdict.capabilities.get(2).id);
     }
 
+    /** Emulator images ship gearhead as a stub: installed + enabled, but it cannot project. */
+    @Test
+    public void stubGearheadIsReportedAsAWarningNotAsReady() {
+        DeviceProfile profile = base();
+        profile.gearheadInstalled = true;
+        profile.gearheadEnabled = true;
+        profile.gearheadVersionName = "1.2.531830-stub";
+
+        Capability packageRow = find(ReadinessEngine.evaluate(profile),
+                Capability.Id.GEARHEAD_PACKAGE);
+        assertEquals(Capability.State.WARN, packageRow.state);
+        assertTrue(packageRow.evidence.contains("stub"));
+    }
+
     /** 0.1.1 reported "tcp 5277 in use" for AiPlay's own listener; that is the goal, not a fault. */
     @Test
     public void ownReceiverHoldingThePortIsNotAConflict() {

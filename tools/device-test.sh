@@ -57,21 +57,41 @@ if [ "$INSTALL" = "1" ]; then
   "${ADB[@]}" install -r "$APK" || exit 1
 fi
 
-echo "== launch =="
+echo "== launch + receiver =="
 "${ADB[@]}" logcat -c
-"${ADB[@]}" shell am start -W -n "$PKG/.ui.SplashActivity" >/dev/null
-sleep 3
-
-echo "== receiver =="
-"${ADB[@]}" shell am start-foreground-service -n "$PKG/.receiver.AaReceiverService" \
-  -a com.ejjat.aiplay.action.START_RECEIVER >/dev/null 2>&1 \
-  || "${ADB[@]}" shell am start-service -n "$PKG/.receiver.AaReceiverService" \
-       -a com.ejjat.aiplay.action.START_RECEIVER >/dev/null 2>&1
+# AaReceiverService is not exported on purpose, so `am start-foreground-service` is denied for the
+# shell uid. The launcher activity is exported: ask the app to start its own receiver.
+"${ADB[@]}" shell am start -W -n "$PKG/.ui.SplashActivity" \
+  --ez aiplay.start_receiver true >/dev/null
 sleep 2
 
 echo "== forward =="
 "${ADB[@]}" forward "tcp:$PORT" "tcp:$PORT" || exit 1
 echo "laptop 127.0.0.1:$PORT -> device :$PORT"
+
+echo "== waiting for the receiver to listen =="
+if ! python3 - "$PORT" <<'PYWAIT'
+import socket, sys, time
+port = int(sys.argv[1])
+for _ in range(40):
+    probe = socket.socket()
+    probe.settimeout(0.5)
+    try:
+        probe.connect(("127.0.0.1", port))
+        sys.exit(0)
+    except OSError:
+        time.sleep(0.5)
+    finally:
+        probe.close()
+sys.exit(1)
+PYWAIT
+then
+  echo "receiver is not listening on $PORT." >&2
+  echo "open AiPlay on the device and press \"Start receiver\", then rerun with --no-install." >&2
+  "${ADB[@]}" logcat -d -v brief -s AiPlay:D | tail -15 >&2
+  exit 3
+fi
+echo "listening"
 
 echo "== probe =="
 PROBE_STATUS=2

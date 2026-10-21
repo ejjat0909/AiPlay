@@ -56,11 +56,17 @@ public final class DeviceProfile {
 
     public List<Capability> capabilities() {
         List<Capability> list = new ArrayList<Capability>(10);
+        // The emulator system images ship gearhead as a stub ("1.2.531830-stub"): installed and
+        // enabled, but it cannot project anything. Saying "OK" there would send a rig chasing a
+        // feature the image does not have.
+        boolean stub = gearheadVersionName.contains("-stub");
         list.add(new Capability(Capability.Id.GEARHEAD_PACKAGE,
-                gearheadInstalled ? Capability.State.OK : Capability.State.MISSING,
-                gearheadInstalled
-                        ? "installed" + (gearheadVersionName.isEmpty() ? "" : " " + gearheadVersionName)
-                        : "not installed"));
+                !gearheadInstalled ? Capability.State.MISSING
+                        : (stub ? Capability.State.WARN : Capability.State.OK),
+                !gearheadInstalled ? "not installed"
+                        : "installed"
+                        + (gearheadVersionName.isEmpty() ? "" : " " + gearheadVersionName)
+                        + (stub ? " (stub: cannot project)" : "")));
         list.add(new Capability(Capability.Id.GEARHEAD_ENABLED,
                 !gearheadInstalled ? Capability.State.UNKNOWN
                         : (gearheadEnabled ? Capability.State.OK : Capability.State.MISSING),
