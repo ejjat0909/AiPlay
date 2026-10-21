@@ -8,6 +8,12 @@ import java.util.List;
  *
  * <p>Pure so the strings are unit-tested: a typo here would silently fail on a real head unit and
  * look like "the app does not work".</p>
+ *
+ * <p>Rule learned from a real device (Android 16, 0.1.1): every {@code pm}/{@code cmd package}
+ * command that accepts {@code --user} must carry it explicitly. Without it the platform defaults to
+ * {@code --user current} ({@code -2}), which requires {@code INTERACT_ACROSS_USERS} — a permission
+ * an ordinary app uid does not have, so the command dies with a {@code SecurityException} instead
+ * of answering the question.</p>
  */
 public final class PrivilegePlan {
 
@@ -35,11 +41,29 @@ public final class PrivilegePlan {
 
     /** Commands that ask the platform whether the package is visible to the launcher. */
     public static List<String> inspectCommands() {
+        return inspectCommands(0);
+    }
+
+    /**
+     * Commands that ask the platform whether the package is visible to the launcher, for one user.
+     *
+     * <p>{@code resolve-activity} needs a real intent: a bare package name is parsed as a URI and
+     * always answers "No activity found". The launcher query below is the question we actually
+     * mean, and {@code --user} keeps it legal for an unprivileged caller.</p>
+     */
+    public static List<String> inspectCommands(int userId) {
         List<String> commands = new ArrayList<String>(3);
-        commands.add("pm list packages -d | grep -i gearhead");
-        commands.add("cmd package resolve-activity --brief " + GEARHEAD_PACKAGE);
+        commands.add("pm list packages -d --user " + userId + " | grep -i gearhead");
+        commands.add(launcherQuery(userId));
         commands.add("dumpsys package " + GEARHEAD_PACKAGE + " | head -40");
         return commands;
+    }
+
+    /** The one command that answers "does this package have a launcher entry for this user?". */
+    public static String launcherQuery(int userId) {
+        return "cmd package resolve-activity --brief --user " + userId
+                + " -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "
+                + GEARHEAD_PACKAGE;
     }
 
     /** Joins commands for a single {@code su -c} invocation. */
@@ -65,8 +89,7 @@ public final class PrivilegePlan {
         builder.append("adb shell pm grant ").append(GEARHEAD_PACKAGE).append(' ')
                 .append(PERMISSION_FINE_LOCATION).append("\n\n");
         builder.append("# 4. Confirm the entry point resolves\n");
-        builder.append("adb shell cmd package resolve-activity --brief ")
-                .append(GEARHEAD_PACKAGE).append("\n\n");
+        builder.append("adb shell ").append(launcherQuery(0)).append("\n\n");
         builder.append("# 5. Reboot the head unit\n");
         builder.append("adb reboot\n");
         return builder.toString();

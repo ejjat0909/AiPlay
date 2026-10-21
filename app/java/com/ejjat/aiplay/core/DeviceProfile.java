@@ -63,6 +63,12 @@ public final class DeviceProfile {
                 !gearheadInstalled ? Capability.State.UNKNOWN
                         : (gearheadEnabled ? Capability.State.OK : Capability.State.MISSING),
                 !gearheadInstalled ? "n/a" : (gearheadEnabled ? "enabled" : "disabled for user 0")));
+        list.add(new Capability(Capability.Id.GEARHEAD_LAUNCHER,
+                !gearheadInstalled ? Capability.State.UNKNOWN
+                        : (gearheadHasLauncher ? Capability.State.OK : Capability.State.WARN),
+                !gearheadInstalled ? "n/a"
+                        : (gearheadHasLauncher ? "launcher entry"
+                                : "no icon; open from Settings > Connected devices")));
         list.add(new Capability(Capability.Id.PLAY_SERVICES,
                 gmsInstalled && gmsEnabled ? Capability.State.OK
                         : (gmsInstalled ? Capability.State.WARN : Capability.State.MISSING),

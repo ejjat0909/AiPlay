@@ -50,16 +50,38 @@ public class ReadinessEngineTest {
         assertTrue(verdict.score < 100);
     }
 
+    /**
+     * Real device evidence (OPPO CPH2739, Android 16, AA 15.6.654484): gearhead is installed and
+     * enabled but exposes no launcher activity. 0.1.0 called that P3 and told the driver to repair a
+     * healthy install; the launcher entry is informational, not a defect.
+     */
     @Test
-    public void p3WhenEnabledButNoLauncherEntry() {
+    public void installedAndEnabledWithoutLauncherEntryIsStillReady() {
         DeviceProfile profile = base();
         profile.gearheadInstalled = true;
         profile.gearheadEnabled = true;
         profile.gearheadHasLauncher = false;
 
         Verdict verdict = ReadinessEngine.evaluate(profile);
-        assertEquals(Condition.P3_HIDDEN, verdict.condition);
-        assertEquals(Action.REPAIR_ANDROID_AUTO, verdict.action);
+        assertEquals(Condition.P1_READY, verdict.condition);
+        assertEquals(Action.OPEN_ANDROID_AUTO, verdict.action);
+        assertEquals("gearhead_ready_no_icon", verdict.rationaleKey);
+        assertEquals(100, verdict.score);
+        assertEquals(Capability.State.WARN,
+                find(verdict, Capability.Id.GEARHEAD_LAUNCHER).state);
+    }
+
+    @Test
+    public void launcherEntryIsReportedAsOkWhenPresent() {
+        DeviceProfile profile = base();
+        profile.gearheadInstalled = true;
+        profile.gearheadEnabled = true;
+        profile.gearheadHasLauncher = true;
+
+        Verdict verdict = ReadinessEngine.evaluate(profile);
+        assertEquals(Capability.State.OK,
+                find(verdict, Capability.Id.GEARHEAD_LAUNCHER).state);
+        assertEquals("gearhead_ready", verdict.rationaleKey);
     }
 
     @Test
@@ -108,10 +130,12 @@ public class ReadinessEngineTest {
     }
 
     @Test
-    public void capabilitiesAlwaysDescribeTenFacts() {
+    public void capabilitiesAlwaysDescribeElevenFacts() {
         Verdict verdict = ReadinessEngine.evaluate(base());
-        assertEquals(10, verdict.capabilities.size());
+        assertEquals(11, verdict.capabilities.size());
         assertEquals(Capability.Id.GEARHEAD_PACKAGE, verdict.capabilities.get(0).id);
+        assertEquals(Capability.Id.GEARHEAD_ENABLED, verdict.capabilities.get(1).id);
+        assertEquals(Capability.Id.GEARHEAD_LAUNCHER, verdict.capabilities.get(2).id);
     }
 
     @Test(expected = IllegalArgumentException.class)

@@ -7,7 +7,7 @@
     <string name="capabilities">Capabilities</string>
     <string name="capabilities_hint">probed on this device</string>
     <string name="status_ready_title">Android Auto is ready</string>
-    <string name="status_ready_body">This unit already has Android Auto. Open it, connect your phone, and drive.</string>
+    <string name="status_ready_body">This unit already has Android Auto, enabled. No icon? Open it from Settings &gt; Connected devices, or tap Open to jump to its App info.</string>
     <string name="status_disabled_title">Android Auto is disabled</string>
     <string name="status_disabled_body">Android Auto is installed on this unit but turned off for user 0. One command turns it back on.</string>
     <string name="status_hidden_title">Android Auto is unreachable</string>
@@ -46,6 +46,7 @@
     <!-- Capability labels -->
     <string name="cap_gearhead">Android Auto package</string>
     <string name="cap_gearhead_enabled">Android Auto enabled</string>
+    <string name="cap_gearhead_launcher">Android Auto icon</string>
     <string name="cap_gms">Google Play services</string>
     <string name="cap_root">Root shell</string>
     <string name="cap_shizuku">Shizuku</string>

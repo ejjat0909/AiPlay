@@ -65,6 +65,12 @@ least five different conditions, and each has a different fix:
 | P4 | Gearhead **absent**, but the unit has GMS and an AA-capable Android version | No AA at all | Partly — needs an AA *receiver* (Layer 2), or a system-app install |
 | P5 | Gearhead absent **and** no GMS / heavily stripped Chinese ROM | No AA, no Play Services | No — needs a receiver that does not depend on GMS |
 
+**0.1.1 correction (device evidence).** The P3 row above does not survive contact with a
+real install: Android Auto 15.6.654484 on Android 16 has *no* launcher activity at all
+(reached via Settings › Connected devices), so "no launcher entry" cannot mean "hidden".
+0.1.1 therefore maps installed + enabled to P1 regardless of the launcher, and reports the
+icon as an informational capability. P3 stays in the enum only so 0.1.0 reports still parse.
+
 AiPlay's audit distinguishes P1–P5 by evidence (package manager state, GMS presence,
 root availability, `ro.build` fingerprint, `FEATURE_USB_HOST`, WiFi Direct support)
 and never pretends a P5 device is a P2 device.
@@ -690,7 +696,7 @@ Acceptance criteria:
 - [x] `Enable Android Auto` executes the privileged command when `su` exists, and
       falls back to the ADB recipe otherwise.
 - [x] Receiver advertises `_androidauto._tcp` and accepts a TLS connection.
-- [x] Frame codec + readiness engine covered by unit tests; all pass (53 tests).
+- [x] Frame codec + readiness engine covered by unit tests; all pass (57 tests).
 - [x] Docs: PLAN, REA analysis, compatibility, protocol, build, testing.
 - [ ] Install on a physical head unit (blocked: no device in this workspace; see
       docs/TESTING.md §6).
@@ -752,8 +758,10 @@ adb shell pm enable --user 0 com.google.android.projection.gearhead
 # 3. Give it the permissions a head unit needs
 adb shell pm grant com.google.android.projection.gearhead android.permission.ACCESS_FINE_LOCATION
 
-# 4. Confirm the service is visible
-adb shell cmd package resolve-activity --brief com.google.android.projection.gearhead
+# 4. Confirm the package resolves (a modern AA install has no launcher entry)
+adb shell cmd package resolve-activity --brief --user 0 \
+  -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+  -p com.google.android.projection.gearhead
 
 # 5. Reboot the unit
 adb reboot

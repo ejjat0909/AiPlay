@@ -15,7 +15,11 @@ public enum Condition {
     /** Android Auto is installed but disabled for the current user. One command fixes it. */
     P2_DISABLED("P2", "disabled"),
 
-    /** Android Auto is enabled but unreachable: no launcher entry and/or a missing permission. */
+    /**
+     * Legacy: 0.1.0 reported this whenever gearhead had no launcher activity. Modern Android Auto
+     * (15.x) never ships one, so 0.1.1 classifies installed+enabled as {@link #P1_READY} and keeps
+     * this value only so older reports still parse. Not produced by {@link ReadinessEngine}.
+     */
     P3_HIDDEN("P3", "hidden"),
 
     /** No Android Auto package, but Google Play services exist: a receiver can work. */

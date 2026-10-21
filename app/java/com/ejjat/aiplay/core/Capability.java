@@ -16,6 +16,7 @@ public final class Capability {
     public enum Id {
         GEARHEAD_PACKAGE,
         GEARHEAD_ENABLED,
+        GEARHEAD_LAUNCHER,
         PLAY_SERVICES,
         ROOT_SHELL,
         SHIZUKU,

@@ -48,7 +48,7 @@ service discovery; it will not draw CarPlay-style projection yet.
 ```sh
 # build it yourself (no Gradle)
 ANDROID_HOME=/path/to/android-sdk ./tools/build.sh
-adb install -r build/AiPlay-0.1.0.apk
+adb install -r build/AiPlay-0.1.1.apk
 ```
 
 Requirements for the build: JDK 17, Android SDK build-tools 34 and platform 34. Nothing else.
@@ -82,7 +82,7 @@ Yes — AiPlay installs and runs on any Android 7+ phone. What a phone can and c
 
 ```sh
 # 1. install on the phone
-adb install -r AiPlay-0.1.0.apk
+adb install -r AiPlay-0.1.1.apk
 
 # 2. same Wi-Fi for both, then in the app tap "Start wireless receiver"
 # 3. from the laptop:

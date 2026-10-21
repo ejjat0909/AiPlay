@@ -50,6 +50,7 @@ public final class HomeActivity extends Activity {
     private TextView deviceLine;
     private TextView receiverLine;
     private Button primary;
+    private Button receiverToggle;
     private LinearLayout capabilityBox;
 
     private DeviceProfile profile;
@@ -218,16 +219,20 @@ public final class HomeActivity extends Activity {
         });
         footer.addView(recipe);
 
-        Button stop = Ui.secondaryButton(this, getString(R.string.action_stop_receiver));
-        stop.setLayoutParams(new LinearLayout.LayoutParams(0, Ui.dp(this, 52), 1f));
-        stop.setOnClickListener(new View.OnClickListener() {
+        receiverToggle = Ui.secondaryButton(this, getString(R.string.action_start_receiver));
+        receiverToggle.setLayoutParams(new LinearLayout.LayoutParams(0, Ui.dp(this, 52), 1f));
+        receiverToggle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                AaReceiverService.stop(HomeActivity.this);
-                updateReceiverLine();
+                if (AaReceiverService.isRunning()) {
+                    AaReceiverService.stop(HomeActivity.this);
+                    updateReceiverLine();
+                } else {
+                    startReceiver();
+                }
             }
         });
-        footer.addView(stop);
+        footer.addView(receiverToggle);
         return footer;
     }
 
@@ -428,9 +433,17 @@ public final class HomeActivity extends Activity {
         if (receiverLine == null) {
             return;
         }
-        receiverLine.setText(AaReceiverService.isRunning()
+        boolean running = AaReceiverService.isRunning();
+        receiverLine.setText(running
                 ? getString(R.string.receiver_running, Prefs.receiverPort())
                 : getString(R.string.receiver_stopped));
+        // The receiver is AiPlay's own feature, so it must be reachable even when Android Auto is
+        // already healthy (P1): 0.1.0 only offered it as the P4/P5 primary action, which left a
+        // phone with gearhead installed unable to start it at all.
+        if (receiverToggle != null) {
+            receiverToggle.setText(running
+                    ? R.string.action_stop_receiver : R.string.action_start_receiver);
+        }
     }
 
     private String titleFor(Condition condition) {
@@ -482,6 +495,8 @@ public final class HomeActivity extends Activity {
                 return getString(R.string.cap_gearhead);
             case GEARHEAD_ENABLED:
                 return getString(R.string.cap_gearhead_enabled);
+            case GEARHEAD_LAUNCHER:
+                return getString(R.string.cap_gearhead_launcher);
             case PLAY_SERVICES:
                 return getString(R.string.cap_gms);
             case ROOT_SHELL:

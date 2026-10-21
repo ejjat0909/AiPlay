@@ -40,15 +40,16 @@ public final class ReadinessEngine {
         Action action;
         String rationale;
 
-        if (profile.gearheadInstalled && profile.gearheadEnabled && profile.gearheadHasLauncher) {
+        if (profile.gearheadInstalled && profile.gearheadEnabled) {
+            // Installed + enabled is the whole answer. A missing launcher entry is *not* a defect:
+            // Android Auto 15.x ships no launcher activity on ColorOS/One UI/modern builds and is
+            // reached through Settings > Connected devices. 0.1.0 treated that as P3 "hidden" and
+            // told a perfectly healthy phone to "repair" Android Auto.
             condition = Condition.P1_READY;
             action = Action.OPEN_ANDROID_AUTO;
-            rationale = "gearhead_ready";
+            rationale = profile.gearheadHasLauncher
+                    ? "gearhead_ready" : "gearhead_ready_no_icon";
             score = 100;
-        } else if (profile.gearheadInstalled && profile.gearheadEnabled) {
-            condition = Condition.P3_HIDDEN;
-            action = Action.REPAIR_ANDROID_AUTO;
-            rationale = "gearhead_hidden";
         } else if (profile.gearheadInstalled) {
             condition = Condition.P2_DISABLED;
             action = Action.ENABLE_ANDROID_AUTO;
