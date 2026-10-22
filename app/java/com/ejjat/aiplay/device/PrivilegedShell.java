@@ -135,7 +135,19 @@ public final class PrivilegedShell {
             }
             return new Result(process.exitValue(), output.toString());
         } catch (Exception error) {
-            Diag.log("shell", "exec failed: " + command[0], error);
+            // "su exists but this app may not run it" (error=13) and "no such file" (error=2) are
+            // ordinary answers, not crashes: one line, no 12-line stack trace in every report.
+            String message = String.valueOf(error.getMessage());
+            boolean expected = error instanceof java.io.IOException
+                    && (message.contains("error=13") || message.contains("error=2,")
+                    || message.contains("Permission denied") || message.contains("No such file"));
+            if (expected) {
+                Diag.log("shell", command[0] + " cannot be run by this app ("
+                        + (message.contains("error=13") || message.contains("Permission denied")
+                        ? "permission denied" : "not found") + ")");
+            } else {
+                Diag.log("shell", "exec failed: " + command[0], error);
+            }
             return new Result(-1, error.getClass().getSimpleName() + ": " + error.getMessage());
         } finally {
             if (process != null) {

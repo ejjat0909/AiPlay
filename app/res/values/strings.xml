@@ -100,7 +100,7 @@
     <string name="inspect_empty">No output. Either Android Auto is absent, or this shell cannot see package state.</string>
 
     <!-- Diagnostics -->
-    <string name="diagnostics_intro">Everything below is local. Reports contain no passwords, SSIDs or phone names.</string>
+    <string name="diagnostics_intro">Everything below is local. Reports contain no passwords, SSIDs, phone names, serial numbers or MAC addresses. Hardware properties are filtered, and only head-unit vendor and updater package names are listed. Read it once before sharing.</string>
     <string name="toast_copied">Copied</string>
     <string name="toast_saved">Saved to %1$s</string>
     <string name="toast_save_failed">Could not save the report</string>

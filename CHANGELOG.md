@@ -43,6 +43,10 @@ debloat and a firmware change. Verified on emulators; **not yet on a head unit**
   On the emulator: a phone silent for 30 s while answering stayed connected (6 pings); mutations (drop on the first
   unanswered ping, never drop, pongs not counted, first ping immediate) each fail 2-3 tests.
 * `tools/device-test.sh` now resets night mode first; a leftover night mode made its night step a no-op.
+* **A 12-line stack trace in every report** when `su` exists but this app may not run it (`error=13`, common on head
+  units): `PrivilegedShell` now logs one line (`su cannot be run by this app (permission denied)`). Seen at the end of
+  the report on the Android 11 emulator. The Diagnostics intro now says what is filtered (serial numbers, MAC
+  addresses) and that only vendor/updater package names are listed.
 
 ### Found and fixed while testing the hardware section
 
