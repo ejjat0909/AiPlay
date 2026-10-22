@@ -211,6 +211,7 @@ public final class HardwareProbe {
         d.abis = Build.SUPPORTED_ABIS == null ? new String[0] : Build.SUPPORTED_ABIS;
         d.sdk = Build.VERSION.SDK_INT;
         d.androidRelease = nz(Build.VERSION.RELEASE);
+        d.fingerprint = nz(Build.FINGERPRINT);
         if (Build.VERSION.SDK_INT >= 31) {
             d.socManufacturer = nz(Build.SOC_MANUFACTURER);
             d.socModel = nz(Build.SOC_MODEL);
@@ -326,6 +327,15 @@ public final class HardwareProbe {
             d.largeMemoryClassMb = am.getLargeMemoryClass();
             d.lowRamDevice = am.isLowRamDevice();
         }
+        String swaps = read("/proc/swaps", d, false);
+        if (swaps != null) {
+            for (String line : swaps.split("\n")) {
+                String trimmed = line.trim().replaceAll("\\s+", " ");
+                if (trimmed.length() > 0 && !trimmed.startsWith("Filename")) {
+                    d.swapLines.add(trimmed);
+                }
+            }
+        }
     }
 
     private static void storage(Context context, HardwareData d) {
@@ -396,6 +406,7 @@ public final class HardwareProbe {
                 String eol = readTrim("/sys/block/" + name + "/device/pre_eol_info");
                 if (life != null || eol != null) {
                     d.flashHealth = FlashHealth.describe(life, eol);
+                    d.flashWearLowPercent = FlashHealth.usedPercentLow(life);
                 }
             } else if (scsi) {
                 String vendor = readTrim("/sys/block/" + name + "/device/vendor");
@@ -528,6 +539,52 @@ public final class HardwareProbe {
             d.partitions = PartitionTable.parse(text);
             if (!d.partitions.valid()) {
                 d.skip("/proc/partitions", "read but empty");
+            } else if (d.partitions.namesAreNumbered()) {
+                // /proc/partitions only has numbers on many kernels; the labels are symlinks in by-name.
+                java.util.Map<String, String> names = byName();
+                if (names.isEmpty()) {
+                    d.skip("/dev/block/*/by-name", "not readable: partitions can only be told apart by size");
+                } else {
+                    d.partitions = d.partitions.withNames(names);
+                }
+            }
+        }
+    }
+
+    /** device node ("mmcblk0p5") to label ("recovery"), from the by-name symlink directories. */
+    private static java.util.Map<String, String> byName() {
+        java.util.Map<String, String> names = new java.util.HashMap<String, String>();
+        List<File> dirs = new ArrayList<File>();
+        dirs.add(new File("/dev/block/by-name"));
+        collectByName(new File("/dev/block/platform"), 0, dirs);
+        for (File dir : dirs) {
+            File[] links = dir.listFiles();
+            if (links == null) {
+                continue;
+            }
+            for (File link : links) {
+                try {
+                    String target = android.system.Os.readlink(link.getPath());
+                    int slash = target.lastIndexOf('/');
+                    names.put(slash < 0 ? target : target.substring(slash + 1), link.getName());
+                } catch (Exception notALink) {
+                    // not a symlink, or not readable: skip it
+                }
+            }
+        }
+        return names;
+    }
+
+    private static void collectByName(File dir, int depth, List<File> out) {
+        File[] children = dir.listFiles();
+        if (children == null || depth > 3) {
+            return;
+        }
+        for (File child : children) {
+            if (child.getName().equals("by-name")) {
+                out.add(child);
+            } else if (child.isDirectory()) {
+                collectByName(child, depth + 1, out);
             }
         }
     }

@@ -95,3 +95,21 @@ The report gives **signals**, not a verdict; the decision is yours (or whoever r
   process list, the root path (`top`, `dumpsys meminfo`), and the vendor-package pointers. Those are covered by the parser tests only.
 * The chip-name patterns and ARM part numbers come from public knowledge, not from a database of head units; a family
   that is not matched shows as "not recognised", not as a guess.
+
+
+## The first real unit (alps 8227L_demo, firmware JCAC10003-OC2)
+
+What its report showed, and what it taught the report:
+
+| Reading | Value | What it means |
+| --- | --- | --- |
+| Android | label "10", fingerprint "6.0", **API 27** | the firmware's version labels disagree with each other; API 27 is Android 8.1 |
+| CPU | 4x Cortex-A7, 1.12 GHz, Mali-450 MP, 32-bit only | an old-generation chip; AC82xx is Autochips, on MediaTek-style firmware |
+| RAM | MemTotal 4.00 GiB, 93% in use, swap 43%, load 13 to 19 on 4 cores | the figure is suspiciously round and the behaviour is that of a much smaller RAM |
+| Storage | /data 32.00 GiB on a 14.68 GiB eMMC | the 32 GB is not real |
+| Flash | eMMC 70-80% of rated life used | the flash is well worn |
+| Heat | 49 C CPU, 64 C PMIC, no throttling in the CPU test | heat is not the problem |
+| Openness | `ro.secure=0`, `ro.debuggable=1`, SELinux permissive, userdebug build | `adb shell` is very likely root, so everything the report could not show is readable over adb |
+
+The process list could not be captured (Android shows an app only its own processes): run
+`adb shell top -b -n 1 -m 15` and `adb shell dumpsys meminfo` and compare.

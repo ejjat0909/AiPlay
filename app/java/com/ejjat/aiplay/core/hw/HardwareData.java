@@ -23,6 +23,7 @@ public final class HardwareData {
     public String androidRelease = "";
     public CpuInfo cpu = new CpuInfo();
     public String kernel = "";
+    public String fingerprint = "";
     public String gpuVendor = "", gpuRenderer = "", gpuVersion = "";
     public String displayInfo = "";
 
@@ -65,6 +66,10 @@ public final class HardwareData {
     public final List<Block> blocks = new ArrayList<Block>();
     public String dataFilesystem = "";
     public String flashHealth = "";
+    /** Lower bound of the eMMC wear estimate in percent, or -1 when not exposed. */
+    public int flashWearLowPercent = -1;
+    /** Lines of /proc/swaps without the header. */
+    public final List<String> swapLines = new ArrayList<String>();
 
     // ---- load, clocks, heat
     public String loadavg = "";

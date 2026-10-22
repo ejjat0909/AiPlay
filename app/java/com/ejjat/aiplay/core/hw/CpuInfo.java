@@ -43,6 +43,7 @@ public final class CpuInfo {
             return info;
         }
         Core current = null;
+        String headerModel = "";
         for (String raw : text.split("\n")) {
             int colon = raw.indexOf(':');
             if (colon < 0) {
@@ -51,16 +52,19 @@ public final class CpuInfo {
             String key = raw.substring(0, colon).trim().toLowerCase();
             String value = raw.substring(colon + 1).trim();
             if (key.equals("processor")) {
-                current = new Core();
-                try {
+                if (value.matches("\\d+")) {
+                    current = new Core();
                     current.index = Integer.parseInt(value);
-                } catch (NumberFormatException notANumber) {
-                    // 32-bit ARM prints the model here ("ARMv7 Processor rev 4 (v7l)") and the
-                    // index in a separate line; keep the text so the core still has a name.
-                    current.index = info.cores.size();
-                    current.modelName = value;
+                    if (headerModel.length() > 0) {
+                        current.modelName = headerModel;
+                    }
+                    info.cores.add(current);
+                } else {
+                    // Older 32-bit ARM kernels open with "Processor : ARMv7 Processor rev 3 (v7l)": a
+                    // description of the CPU family, not a core. Counting it made a quad-core unit
+                    // look like it had five cores.
+                    headerModel = value;
                 }
-                info.cores.add(current);
             } else if (key.equals("hardware")) {
                 info.hardware = value;
             } else if (current != null) {

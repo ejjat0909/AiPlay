@@ -42,6 +42,8 @@ public final class ChipGuess {
                 Pattern.compile("(?i)hisilicon|kirin|\\bhi\\d{4}\\w*"));
         FAMILIES.put("Telechips",
                 Pattern.compile("(?i)telechips|\\btcc\\d+\\w*"));
+        FAMILIES.put("Autochips (AC82xx)",
+                Pattern.compile("(?i)\\bac8\\d{3}\\w*|autochips"));
         FAMILIES.put("NXP i.MX / S32",
                 Pattern.compile("(?i)\\bimx\\d*\\w*|\\bs32\\w*|\\bnxp\\b"));
         FAMILIES.put("Intel x86",
@@ -97,6 +99,34 @@ public final class ChipGuess {
     }
 
     /**
+     * A note when the firmware is built on MediaTek's BSP, which says nothing reliable about the chip
+     * itself: several vendors ship MediaTek-derived designs under their own names. Empty when no
+     * MediaTek-style property or thermal sensor is present.
+     */
+    public static String bspNote(Map<String, String> props, List<String> thermalLines) {
+        boolean properties = false;
+        for (String key : props.keySet()) {
+            if (key.startsWith("ro.mediatek.") || key.startsWith("ro.mtk_")) {
+                properties = true;
+                break;
+            }
+        }
+        boolean sensors = false;
+        for (String line : thermalLines) {
+            if (line.contains("(mtk")) {
+                sensors = true;
+            }
+        }
+        if (!properties && !sensors) {
+            return "";
+        }
+        return "the firmware is built on MediaTek's BSP (" + (properties ? "ro.mediatek.* / ro.mtk_* "
+                + "properties" : "") + (properties && sensors ? ", " : "") + (sensors ? "mtk* thermal "
+                + "sensors" : "") + "): the SoC is a MediaTek part or a design derived from one, "
+                + "whatever name it carries";
+    }
+
+    /**
      * What the core designs say about the chip's class. Cores cannot be renamed by a vendor, so this
      * is the evidence to prefer when the names above disagree or are generic.
      */
@@ -139,7 +169,7 @@ public final class ChipGuess {
         String clock = maxFreqKhz > 0 ? String.format(java.util.Locale.US, ", max %.2f GHz",
                 maxFreqKhz / 1000000.0) : "";
         if (old) {
-            return cpu.cores.size() + " old-generation cores (2011-2014 designs)" + clock
+            return cpu.cores.size() + " old-generation cores (designs from 2005-2011)" + clock
                     + ": a weak chip by today's app demands";
         }
         if (performance) {

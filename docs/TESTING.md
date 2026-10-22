@@ -121,6 +121,7 @@ adb shell wm size reset && adb shell wm density reset
 | `hw.HwParsersTest` | 25 | cpuinfo/meminfo/partitions/ps/getprop parsing on representative inputs, core-design naming, marketed sizes, **no planted secret survives the property filter** |
 | `hw.HwAnalysisTest` | 30 | chip-family matching, core class, throttling rules, the benchmark, eMMC wear, flashability and lag rules |
 | `hw.HardwareReportTest` | 9 | the whole section from fixture data: every requested item present, nothing personal, unread things listed with the adb command that fills them |
+| `hw.RealUnitTest` | 20 | the first real head unit's report: 4 cores not 5, chip family, Android label vs API level, a 32 GB /data on a 14.7 GB chip, a round MemTotal, numbered partitions, wear and swap signals |
 | `ReceiverIdentityTest` | 2 | The committed TLS identity loads and is not PBES2 (older Android cannot read it) |
 | `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |

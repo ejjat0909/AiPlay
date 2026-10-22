@@ -107,7 +107,7 @@ public final class DeviceProfile {
     }
 
     public String describe() {
-        return manufacturer + " " + model + " (" + device + ") · Android " + sdkInt
+        return manufacturer + " " + model + " (" + device + ") · " + com.ejjat.aiplay.core.hw.AndroidVersion.label(sdkInt)
                 + " · " + screenWidthDp + "x" + screenHeightDp + "dp";
     }
 }

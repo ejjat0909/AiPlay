@@ -50,6 +50,28 @@ public final class SizeFormat {
         return ">" + (long) sizes[sizes.length - 1] + " GB";
     }
 
+    /**
+     * How close {@code bytes} is to a standard RAM size, as a percentage (99 or 100), or 0 when it is
+     * not that close. A real kernel reports noticeably less than the installed RAM, so 99% or more of a
+     * round size cannot be a measured figure.
+     */
+    public static int roundRamPercent(long bytes) {
+        if (bytes <= 0) {
+            return 0;
+        }
+        double gib = bytes / (1024.0 * 1024.0 * 1024.0);
+        for (double size : RAM_SIZES_GB) {
+            if (size < 1) {
+                continue;
+            }
+            double ratio = gib / size;
+            if (ratio >= 0.99 && ratio <= 1.005) {
+                return (int) Math.round(ratio * 100);
+            }
+        }
+        return 0;
+    }
+
     /** Percentage of {@code total} that is used, 0..100; 0 when the total is unknown. */
     public static int percentUsed(long total, long free) {
         if (total <= 0) {

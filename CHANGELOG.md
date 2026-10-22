@@ -2,6 +2,55 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha9] - 2026-10-22
+
+The first report from a real head unit (alps 8227L_demo, API 27, 32-bit quad Cortex-A7, firmware
+JCAC10003-OC2) showed that the hardware section got that unit wrong or left it blank in several places.
+All of them are fixed and pinned by `RealUnitTest`, which uses the values from that report.
+
+### Fixed (each one was wrong or empty on the real unit)
+
+* **Five cores instead of four.** Older 32-bit kernels start `/proc/cpuinfo` with `Processor : ARMv7 Processor
+  rev 3 (v7l)`, a description of the CPU family; it was counted as a core. That also hid the "old-generation
+  cores" verdict (the fake core had no known design) and inflated the load-average comparison.
+* **Chip family "not recognised".** Added Autochips (AC82xx) and a note when the firmware is built on
+  MediaTek's BSP (`ro.mediatek.*`, `ro.mtk_*`, `mtk*` thermal sensors): the SoC is a MediaTek part or a design
+  derived from one, whatever name it carries.
+* **"Android 10" taken at face value on an API 27 build.** The unit's version string says 10, its build
+  fingerprint says 6.0 and its vendor fingerprint says 10, while the API level is 27 (Android 8.1). The report
+  now names the release the API level really is and lists every claim that disagrees. The Home screen summary
+  said "Android 27" (an API level labelled as a release); it now says "API 27 = Android 8.1".
+* **Sizes that cannot be real are called out.**
+  * `/data` reported 32.00 GiB on an eMMC chip of 14.68 GiB: a filesystem cannot be bigger than its chip.
+  * `MemTotal` of 4.00 GiB (99.9% of a round 4 GB): a real kernel reports noticeably less than the installed
+    RAM, so a round figure looks set by the firmware. Combined with 93% in use it says the unit behaves like
+    it has less RAM than it claims, and the report prints the `adb` commands that can check it
+    (`/proc/iomem`, `dmesg`).
+* **"recovery partition: none listed" for a table that is only numbered.** `/proc/partitions` on that kernel
+  lists `mmcblk0p1`..; the labels live in `/dev/block/.../by-name`. The report now reads those symlinks when it
+  can, says "unknown" when it cannot, and always lists the largest internal partitions (it used to end the
+  section in a blank line for any table with unrecognised names).
+* `ro.boottime.chg_mcu_val` was shown as a "vendor/MCU property"; it is a boot-time entry of an init service,
+  not a version, and is now labelled so.
+
+### Added
+
+* eMMC wear as a number (`70-80%` -> at least 70%), a signal when it is at least 70%, and a stronger one when
+  swap lives on that flash instead of zram; swap devices are read from `/proc/swaps`.
+* 20 new tests (255 total): `RealUnitTest` and the new classes `AndroidVersion` and `StorageCheck`. Five
+  mutations (header counted as a core, Autochips removed, version check off, storage check off, numbered table
+  claiming "none listed") each fail 2-5 tests.
+
+### Verified
+
+* Android 8.1 (API 27, x86) emulator, the closest I can get to the unit's Android level: `device-test.sh` exit 0,
+  all 25 checks (video, three audio streams, touch/keys/swipe at the right coordinates, day/night, keep-alive
+  pings); `ignition-test.sh` 11 of 11 with no battery exemption (including a real reboot), as expected since the
+  background-start restriction only starts at Android 12. The Diagnostics report renders and its labels are
+  consistent (no false "conflict").
+* **Not** verified: any of this on the unit itself beyond the report it produced. The `RealUnitTest` cpuinfo core
+  lines are reconstructed (only the header shape and the Cortex-A7 part number are known from the report).
+
 ## [0.2.0-alpha8] — 2026-10-22
 
 A hardware section for the Diagnostics report, so one report from the car unit is enough to choose between a

@@ -115,7 +115,11 @@ public final class FlashHints {
         if (treble.length() > 0) {
             lines.add("Treble: " + treble);
         }
-        if (parts.valid()) {
+        if (parts.valid() && parts.namesAreNumbered()) {
+            lines.add("recovery partition: unknown. This kernel lists partitions by number "
+                    + "(mmcblk0p1 ...) and the by-name labels were not readable, so recovery cannot be "
+                    + "told from boot or system. adb shell ls -l /dev/block/platform/*/*/by-name");
+        } else if (parts.valid()) {
             lines.add("recovery partition: " + (parts.has("recovery") || parts.has("recovery_a")
                     ? "present" : ab ? "none listed (A/B units keep recovery inside boot)"
                     : "none listed"));
@@ -125,12 +129,21 @@ public final class FlashHints {
 
         // --- vendor family pointers
         List<String> vendorProps = new ArrayList<String>();
+        List<String> bootServices = new ArrayList<String>();
         for (String key : p.keySet()) {
             String lower = key.toLowerCase();
             if (lower.contains("mcu") || lower.contains("syu") || lower.contains("microntek")
                     || lower.contains("hct")) {
-                vendorProps.add(key + "=" + p.get(key));
+                if (key.startsWith("ro.boottime.")) {
+                    bootServices.add(key.substring("ro.boottime.".length()));
+                } else {
+                    vendorProps.add(key + "=" + p.get(key));
+                }
             }
+        }
+        if (!bootServices.isEmpty()) {
+            lines.add("init services with an MCU/vendor name that ran at boot: " + join(bootServices)
+                    + " (the unit has an MCU-related service; this is a boot-time entry, not a version)");
         }
         if (!vendorProps.isEmpty()) {
             lines.add("vendor/MCU properties: " + join(vendorProps));

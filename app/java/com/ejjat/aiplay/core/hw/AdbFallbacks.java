@@ -38,6 +38,13 @@ public final class AdbFallbacks {
             out.add("adb shell cat /proc/partitions");
             out.add("adb shell ls -l /dev/block/by-name");
         }
+        if (d.partitions.valid() && d.partitions.namesAreNumbered()) {
+            out.add("adb shell \"ls -l /dev/block/platform/*/*/by-name /dev/block/by-name\"");
+        }
+        if (d.mem.valid() && StorageCheck.ramLooksSetNotMeasured(d.mem.totalBytes())) {
+            out.add("adb shell cat /proc/iomem");
+            out.add("adb shell \"dmesg | grep -i -E 'memory|dram'\"");
+        }
         if (d.blocks.isEmpty()) {
             out.add("adb shell \"ls /sys/block; cat /sys/block/mmcblk0/device/life_time "
                     + "/sys/block/mmcblk0/device/pre_eol_info\"");

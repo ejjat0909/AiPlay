@@ -51,6 +51,21 @@ public final class FlashHealth {
         return out.toString();
     }
 
+    /** Lower bound of the wear estimate in percent (70 for "70-80%"), 100 beyond rated life, -1 when undefined. */
+    public static int usedPercentLow(String lifeTime) {
+        if (lifeTime == null) {
+            return -1;
+        }
+        int worst = -1;
+        for (String part : lifeTime.trim().split("\\s+")) {
+            worst = Math.max(worst, parseHex(part));
+        }
+        if (worst <= 0) {
+            return -1;
+        }
+        return worst >= 0x0B ? 100 : (worst - 1) * 10;
+    }
+
     /** True when either indicator reports a worn card; lag from a dying flash is real. */
     public static boolean worn(String lifeTime, String preEol) {
         if (lifeTime != null) {

@@ -75,7 +75,13 @@ public final class HardwareReport {
         line(o, "device", d.device + (d.product.length() > 0 ? " / product " + d.product : ""));
         line(o, "model", d.manufacturer + " " + d.model + (d.brand.length() > 0 ? " (brand " + d.brand + ")" : ""));
         line(o, "ABIs", join(d.abis));
-        line(o, "android", d.androidRelease + " (API " + d.sdk + ")");
+        List<String> versionClaims = AndroidVersion.mismatches(d.sdk, d.androidRelease, d.fingerprint,
+                PropParser.first(d.props, "ro.vendor.build.fingerprint"));
+        line(o, "android", versionClaims.isEmpty() ? d.androidRelease + " (" + AndroidVersion.label(d.sdk) + ")"
+                : AndroidVersion.label(d.sdk) + "  [the firmware's label says " + d.androidRelease + "]");
+        for (String claim : versionClaims) {
+            o.append("                CONFLICT: ").append(claim).append('\n');
+        }
         line(o, "kernel", d.kernel);
         line(o, "cpu cores", d.cpu.cores.isEmpty() ? "not readable" : d.cpu.cores.size() + ": "
                 + d.cpu.coreSummary());
@@ -123,6 +129,10 @@ public final class HardwareReport {
             o.append("                generic placeholders (no information): ")
                     .append(join(guess.generic)).append('\n');
         }
+        String bsp = ChipGuess.bspNote(d.props, d.thermalLines);
+        if (bsp.length() > 0) {
+            o.append("                ").append(bsp).append('\n');
+        }
         o.append('\n');
     }
 
@@ -132,12 +142,21 @@ public final class HardwareReport {
             long total = d.mem.totalBytes();
             line(o, "RAM total", SizeFormat.bytes(total) + "  (nearest marketed size: "
                     + SizeFormat.marketedRam(total) + "; the kernel reserves some)");
+            if (StorageCheck.ramLooksSetNotMeasured(total)) {
+                o.append("                WARNING: MemTotal is " + SizeFormat.roundRamPercent(total)
+                        + "% of a round " + SizeFormat.marketedRam(total) + ". A real kernel reports "
+                        + "noticeably less than the installed RAM (kernel and GPU/video carve-outs are "
+                        + "reserved), so a figure this round looks set by the firmware, not measured.\n");
+            }
             line(o, "RAM available", SizeFormat.bytes(d.mem.availableBytes()) + "  ("
                     + d.mem.usedPercent() + "% in use)");
             line(o, "MemFree", SizeFormat.bytes(d.mem.get("MemFree") * 1024L));
             line(o, "swap", d.mem.swapTotalBytes() == 0 ? "none" : SizeFormat.bytes(d.mem.swapUsedBytes())
                     + " used of " + SizeFormat.bytes(d.mem.swapTotalBytes()) + " (" + d.mem.swapUsedPercent()
                     + "%)");
+            for (String swap : d.swapLines) {
+                o.append("                swap device: ").append(swap).append('\n');
+            }
             if (d.mem.get("CmaTotal") > 0) {
                 line(o, "CMA", SizeFormat.bytes(d.mem.get("CmaTotal") * 1024L) + " reserved (video/camera)");
             }
@@ -171,6 +190,9 @@ public final class HardwareReport {
             line(o, v.label, SizeFormat.bytes(v.total) + " total, " + SizeFormat.bytes(v.free)
                     + " free, " + SizeFormat.percentUsed(v.total, v.free) + "% full  (marketed size >= "
                     + SizeFormat.marketedStorage(v.total) + ")");
+        }
+        for (String warning : StorageCheck.analyze(d)) {
+            o.append("                WARNING: ").append(warning).append('\n');
         }
         if (d.dataFilesystem.length() > 0) {
             line(o, "/data mount", d.dataFilesystem);
@@ -273,7 +295,20 @@ public final class HardwareReport {
             }
             o.append("partitions (").append(pt.entries.size()).append(" entries, whole disks ")
                     .append(SizeFormat.bytes(diskKb * 1024L)).append("):\n");
-            for (PartitionTable.Entry e : pt.notable()) {
+            List<PartitionTable.Entry> shown = pt.notable();
+            if (pt.namesAreNumbered()) {
+                o.append("  names are numbers only (no by-name labels were readable), so these are the "
+                        + "largest internal partitions, not identified ones:\n");
+                shown = pt.largestInternal(6);
+            } else if (shown.isEmpty()) {
+                o.append("  no partition has a recognised name (boot, recovery, system ...); the largest "
+                        + "are:\n");
+                shown = pt.largestInternal(6);
+                if (shown.isEmpty()) {
+                    o.append("  (the table lists only whole disks)\n");
+                }
+            }
+            for (PartitionTable.Entry e : shown) {
                 o.append(String.format(Locale.US, "  %-14s %s%n", e.name, SizeFormat.bytes(e.kb * 1024L)));
             }
         } else {

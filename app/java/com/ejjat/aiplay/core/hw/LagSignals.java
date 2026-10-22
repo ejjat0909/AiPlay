@@ -64,6 +64,31 @@ public final class LagSignals {
             out.add("the flash chip reports wear: " + d.flashHealth);
         }
 
+        if (total > 0 && StorageCheck.ramLooksSetNotMeasured(total)) {
+            String pressure = d.mem.valid() && d.mem.usedPercent() >= 80 ? " With " + d.mem.usedPercent()
+                    + "% in use, the unit behaves like it has less RAM than it claims." : "";
+            out.add("MemTotal is " + SizeFormat.bytes(total) + ", " + SizeFormat.roundRamPercent(total)
+                    + "% of a round " + SizeFormat.marketedRam(total) + ". A real kernel reports "
+                    + "noticeably less than the installed RAM, so the figure looks set by the firmware "
+                    + "rather than measured." + pressure + " Check /proc/iomem and dmesg over adb, and the "
+                    + "RAM chips if the unit can be opened.");
+        }
+        for (String warning : StorageCheck.analyze(d)) {
+            out.add(warning);
+        }
+        if (d.flashWearLowPercent >= 70) {
+            boolean swapOnFlash = false;
+            for (String swap : d.swapLines) {
+                if (!swap.contains("zram")) {
+                    swapOnFlash = true;
+                }
+            }
+            out.add("the eMMC reports at least " + d.flashWearLowPercent + "% of its rated life used"
+                    + (swapOnFlash && d.mem.swapUsedPercent() >= 10 ? ", and swap lives on that flash "
+                    + "(every swapped page is a write that wears it further)" : "")
+                    + ". A worn flash gets slower and can fail; heavy writes shorten what is left.");
+        }
+
         // ---- processor
         int cores = d.coreCount();
         if (cores <= 2) {

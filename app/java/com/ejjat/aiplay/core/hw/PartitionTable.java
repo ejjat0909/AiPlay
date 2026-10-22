@@ -39,6 +39,65 @@ public final class PartitionTable {
         return table;
     }
 
+    /** A copy with device names (mmcblk0p5) replaced by their by-name labels ("recovery"). */
+    public PartitionTable withNames(java.util.Map<String, String> names) {
+        PartitionTable out = new PartitionTable();
+        for (Entry entry : entries) {
+            String label = names.get(entry.name);
+            out.entries.add(new Entry(label != null ? label : entry.name, entry.kb));
+        }
+        return out;
+    }
+
+    /**
+     * True when partitions are listed only by number (mmcblk0p1 ...): the kernel does not say which
+     * one is boot, recovery or system; those labels live in /dev/block/.../by-name.
+     */
+    public boolean namesAreNumbered() {
+        if (!valid() || !notable().isEmpty()) {
+            return false;
+        }
+        for (Entry entry : entries) {
+            if (entry.name.matches("mmcblk\\d+p\\d+|sd[a-z]+\\d+|nvme\\d+n\\d+p\\d+")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The biggest partitions of the internal flash: not whole disks, not boot/rpmb sub-devices, and
+     * not USB sticks when the unit has an eMMC.
+     */
+    public List<Entry> largestInternal(int count) {
+        boolean hasMmc = false;
+        for (Entry entry : entries) {
+            if (entry.name.matches("mmcblk\\d+p\\d+")) {
+                hasMmc = true;
+            }
+        }
+        List<Entry> pool = new ArrayList<Entry>();
+        for (Entry entry : entries) {
+            String n = entry.name;
+            if (isDisk(n) || n.startsWith("loop") || n.startsWith("ram") || n.startsWith("zram")
+                    || n.startsWith("dm-") || n.contains("boot0") || n.contains("boot1")
+                    || n.contains("rpmb")) {
+                continue;
+            }
+            if (hasMmc && n.startsWith("sd")) {
+                continue;
+            }
+            pool.add(entry);
+        }
+        java.util.Collections.sort(pool, new java.util.Comparator<Entry>() {
+            @Override
+            public int compare(Entry a, Entry b) {
+                return a.kb == b.kb ? 0 : (a.kb < b.kb ? 1 : -1);
+            }
+        });
+        return pool.subList(0, Math.min(count, pool.size()));
+    }
+
     public boolean valid() {
         return !entries.isEmpty();
     }
