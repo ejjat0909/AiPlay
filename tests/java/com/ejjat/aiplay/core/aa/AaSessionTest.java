@@ -1,6 +1,7 @@
 package com.ejjat.aiplay.core.aa;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -289,6 +290,103 @@ public class AaSessionTest {
             closeable.close();
         } catch (IOException ignored) {
             // nothing useful to do
+        }
+    }
+
+    // ---- keep-alive: the head unit pings, the phone is gone after two unanswered pings -------------
+
+    private static AaFrame lastWritten(Rig rig) throws Exception {
+        AaFrame frame = null;
+        while (rig.unread() > 0) {
+            frame = rig.next();
+        }
+        return frame;
+    }
+
+    @Test
+    public void theFirstPingIsOneIntervalAfterTheSessionIsUpThenEveryInterval() throws Exception {
+        Rig rig = new Rig();                       // plaintext: established from the start
+        assertTrue(rig.session.tick(0));
+        assertEquals("no ping yet", 0, rig.session.pingsSent());
+        assertTrue(rig.session.tick(AaSession.PING_INTERVAL_MS - 1));
+        assertEquals(0, rig.session.pingsSent());
+        assertTrue(rig.session.tick(AaSession.PING_INTERVAL_MS));
+        assertEquals(1, rig.session.pingsSent());
+        AaFrame ping = rig.next();
+        assertEquals(AaChannel.CONTROL, ping.channel);
+        assertTrue("channel-0 messages are not CONTROL-flagged", !ping.control);
+        assertEquals(AaMessageType.PING_REQUEST, ping.messageId);
+        assertTrue(rig.session.tick(AaSession.PING_INTERVAL_MS + 100));
+        assertEquals("not again inside the interval", 1, rig.session.pingsSent());
+        rig.session.handle(AaFrame.control(AaMessageType.PING_RESPONSE, ping.payload));
+        assertTrue(rig.session.tick(2 * AaSession.PING_INTERVAL_MS));
+        assertEquals(2, rig.session.pingsSent());
+    }
+
+    @Test
+    public void aPhoneThatAnswersEveryPingIsNeverDropped() throws Exception {
+        Rig rig = new Rig();
+        long now = 0;
+        for (int n = 0; n < 50; n++) {
+            assertTrue("alive at " + now, rig.session.tick(now));
+            while (rig.unread() > 0) {
+                AaFrame f = rig.next();
+                if (f.messageId == AaMessageType.PING_REQUEST) {
+                    rig.session.handle(AaFrame.control(AaMessageType.PING_RESPONSE, f.payload));
+                }
+            }
+            now += AaSession.PING_INTERVAL_MS;
+        }
+        assertTrue(rig.session.pongsReceived() >= 49);
+    }
+
+    @Test
+    public void aPhoneThatNeverAnswersIsDroppedAfterTheSecondUnansweredPing() throws Exception {
+        // OpenAuto: quit when pings sent - pongs received > 1 at the next timer.
+        Rig rig = new Rig();
+        long t = AaSession.PING_INTERVAL_MS;
+        assertTrue(rig.session.tick(0));
+        assertTrue(rig.session.tick(t));                 // ping 1
+        assertTrue(rig.session.tick(2 * t));             // ping 2 (one unanswered is tolerated)
+        assertEquals(2, rig.session.pingsSent());
+        assertFalse("two unanswered pings: gone", rig.session.tick(3 * t));
+        assertTrue(rig.events.toString().contains("stopped answering pings"));
+        assertEquals("no third ping was sent to a dead phone", 2, rig.session.pingsSent());
+    }
+
+    @Test
+    public void silenceAloneDoesNotDropAPhoneThatAnswersPings() throws Exception {
+        // a still map: no media at all for a minute, but the phone answers the head unit's pings
+        Rig rig = new Rig();
+        long now = 0;
+        rig.session.tick(now);
+        for (int n = 1; n <= 12; n++) {
+            now = n * AaSession.PING_INTERVAL_MS;
+            assertTrue(rig.session.tick(now));
+            AaFrame f = lastWritten(rig);
+            if (f != null && f.messageId == AaMessageType.PING_REQUEST) {
+                rig.session.handle(AaFrame.control(AaMessageType.PING_RESPONSE, f.payload));
+            }
+        }
+        assertTrue(rig.session.pongsReceived() >= 11);
+    }
+
+    @Test
+    public void aHandshakeThatNeverFinishesIsAbandonedAndNoPingIsSentBeforeTls() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        AaSession session = new AaSession(new ByteArrayInputStream(new byte[0]), out,
+                sink(new ArrayList<String>()), discovery(), new AaCryptor(tlsContext()));
+        assertTrue(session.tick(0));
+        assertTrue(session.tick(AaSession.HANDSHAKE_TIMEOUT_MS));
+        assertEquals("nothing is written before TLS is up", 0, out.size());
+        assertFalse(session.tick(AaSession.HANDSHAKE_TIMEOUT_MS + 1));
+    }
+
+    private static javax.net.ssl.SSLContext tlsContext() throws Exception {
+        try {
+            return javax.net.ssl.SSLContext.getDefault();
+        } catch (java.security.NoSuchAlgorithmException error) {
+            throw new AssertionError(error);
         }
     }
 

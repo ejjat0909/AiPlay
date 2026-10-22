@@ -2,6 +2,73 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha8] — 2026-10-22
+
+A hardware section for the Diagnostics report, so one report from the car unit is enough to choose between a
+debloat and a firmware change. Verified on emulators; **not yet on a head unit**, which is what it is for.
+
+### Added
+
+* **Hardware section** (docs/HARDWARE.md), on the Diagnostics screen and in *Copy* / *Save & share*:
+  * *chip and board*: `SOC_MANUFACTURER`/`SOC_MODEL`, `BOARD`, `HARDWARE`, ABIs, kernel, the **CPU core designs**
+    from `/proc/cpuinfo` (the evidence a vendor cannot rename), max clock, the GPU name, and a chip-family match
+    that prints its evidence, flags contradictions and lists the placeholders it ignored;
+  * *memory*: total / available / swap / CMA from `/proc/meminfo` and Android's own figure, with the nearest
+    marketed size and a warning when the two totals disagree;
+  * *storage*: size, free space and % full per volume, the physical flash chip and its raw size, and eMMC wear
+    decoded from `life_time` / `pre_eol_info` (the serial-bearing `cid`/`csd` are never read);
+  * *cpu load, clocks and heat*: load average, per-core clock and governor, every thermal zone, Android's thermal
+    state, and a **CPU test** button (8 s: warm-up, one core, all cores) that records work, clock and temperature each second
+    and says whether the chip throttled;
+  * *running processes*: the top by memory when readable (root, or a permissive ROM), otherwise a plain statement and the `adb`
+    commands to run;
+  * *flashability*: bootloader and verified-boot state, A/B and dynamic partitions, recovery partition, vendor/MCU properties
+    (`ro.mcu.*`), vendor and updater packages, the partition table, and a statement of what cannot be determined from the OS;
+  * *properties* (privacy-filtered), *could not be read* (each with the reason and the `adb` command that fills the gap), and
+    *lag signals* (the facts that commonly cause lag, not a verdict).
+* Permission `QUERY_ALL_PACKAGES`, only to notice head-unit vendor and updater packages; the full app list is never printed.
+* 71 new tests (235 total).
+
+### Fixed (found when a test run went wrong, not part of the hardware work)
+
+* **A quiet phone was dropped after 15 seconds.** The receiver closed a session after 15 s without data and never
+  pinged the phone itself; a phone showing a still map could send nothing for that long. OpenAuto (read, not
+  recalled) does the opposite: the **head unit pings every 5 s and quits only when two pings in a row go
+  unanswered**. AiPlay now does the same (`AaSession.tick`, first ping one interval after the session is up,
+  encrypted, answered pings reset the count); a TLS handshake that never finishes is still abandoned after 15 s.
+  Found because the emulator had been left in night mode, so my test's "switch to night" step did nothing, the
+  probe sat silent and the receiver hung up. Tests: 5 session rules (interval, answering phone never dropped,
+  silent phone dropped after the second unanswered ping, a still map is not a dead phone, handshake timeout), and
+  2 over a real socket (silent-but-answering phone stays; non-answering phone is dropped after exactly two pings).
+  On the emulator: a phone silent for 30 s while answering stayed connected (6 pings); mutations (drop on the first
+  unanswered ping, never drop, pongs not counted, first ping immediate) each fail 2-3 tests.
+* `tools/device-test.sh` now resets night mode first; a leftover night mode made its night step a no-op.
+
+### Found and fixed while testing the hardware section
+
+* A clock of "0.00 GHz" was reported as a slow chip: the emulator reports a placeholder, and the code believed it. Clocks under
+  100 MHz are now rejected and the reading is listed as unusable.
+* The process list showed `ps` and `sh` (the commands the app itself ran) and looked system-wide. It now requires
+  system processes before calling a list real.
+* The CPU test made three threads look like 6.5x one core: the one-core phase ran while the runtime was still compiling the
+  loop. A 1 s warm-up fixed it (now 2.7x to 2.9x).
+* `rk30sdk` (a real Rockchip board name) was not matched by the Rockchip pattern.
+* `unknown` placeholders (`ro.bootloader = unknown`) were printed as values.
+* The thermal-zone gap was hidden whenever the battery sensor was readable.
+
+### Verified
+
+* JVM: 235 tests.
+* Emulators API 34 and 30: the section renders on the real Diagnostics screen; the CPU button counts down and rebuilds the
+  report; every blocked read is named. With SELinux permissive the real code read `/proc/loadavg`, a thermal zone and
+  `/proc/partitions`.
+
+### Not verified
+
+* Everything specific to a real unit: eMMC chip and wear files, real `cpufreq` and chip thermal zones, the system-wide process
+  list, the root path, vendor packages. The parsers for them are tested on representative inputs, not captures.
+* What *your* unit lets an app read. That is the point of running it there.
+
 ## [0.2.0-alpha7] — 2026-10-21
 
 Ignition (ACC) start, and the Start button's feedback fixed for real. Verified on emulators; **no real head

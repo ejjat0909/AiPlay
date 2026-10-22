@@ -531,6 +531,7 @@ class Probe:
         self.violations = []
         self.checks = []
         self.events = []            # decoded input/sensor events received while streaming
+        self.pings_answered = 0
 
     # -- io
     def send(self, channel, control, message_id, payload=b"", quiet=False, plain=False):
@@ -555,6 +556,11 @@ class Probe:
 
     def show(self, m, quiet=False):
         self.audit(m)
+        # The head unit pings every 5 s and drops a phone that leaves two unanswered, as OpenAuto does.
+        if m.channel == CONTROL and m.id == PING_REQUEST:
+            self.send(CONTROL, False, PING_RESPONSE, m.payload, quiet=True)
+            self.pings_answered += 1
+            return
         if not quiet:
             print("<- %-12s %-26s %s%s"
                   % (CHANNEL_NAMES.get(m.channel, m.channel),
@@ -566,6 +572,8 @@ class Probe:
         while True:
             m = self.link.next(self.timeout)
             self.show(m, quiet=quiet)
+            if m.channel == CONTROL and m.id == PING_REQUEST:
+                continue                    # answered in show(); never the reply the caller wants
             if m.channel == INPUT and m.id == IN_EVENT_INDICATION:
                 self.record_input(m)
                 continue
@@ -870,6 +878,9 @@ def run(args):
                     ok = False
                 if args.hold > 0:
                     probe.hold(args.hold, args.stop_on)
+                    if args.hold >= 6:
+                        probe.check("the head unit's keep-alive pings were answered",
+                                    probe.pings_answered >= 1, "%d ping(s)" % probe.pings_answered)
                 probe.send(VIDEO, False, AV_STOP_INDICATION)
     except WireError as error:
         print("WIRE MISMATCH: %s" % error)

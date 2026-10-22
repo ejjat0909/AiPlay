@@ -118,6 +118,9 @@ adb shell wm size reset && adb shell wm density reset
 | `input.TouchMapperTest` | 5 | Letterbox mapping on 16:9, 1024x600, 1280x480 and portrait panels; bar taps outside; edge clamping |
 | `audio.AudioCoreTest` | 10 | Bounded PCM queue (drops the oldest, never blocks, finish() keeps the tail), music ducking policy |
 | `ignition.IgnitionPolicyTest` | 11 | Start/stop decisions: every on signal, debounce of a multi-signal wake, an explicit off ending the wake-up (ACC drop while cranking), screen timeout is not off, custom actions, disabled switches |
+| `hw.HwParsersTest` | 25 | cpuinfo/meminfo/partitions/ps/getprop parsing on representative inputs, core-design naming, marketed sizes, **no planted secret survives the property filter** |
+| `hw.HwAnalysisTest` | 30 | chip-family matching, core class, throttling rules, the benchmark, eMMC wear, flashability and lag rules |
+| `hw.HardwareReportTest` | 9 | the whole section from fixture data: every requested item present, nothing personal, unread things listed with the adb command that fills them |
 | `ReceiverIdentityTest` | 2 | The committed TLS identity loads and is not PBES2 (older Android cannot read it) |
 | `aa.AaAvTest` | 11 | AV message ids and wire bytes (setup status OK = 2), timestamp parsing, H.264 SPS/PPS/IDR scanning and config-prefix split |
 | `ReadinessEngineTest` | 9 | P1–P5 classification, hidden-vs-disabled, GMS present-but-disabled, score monotonicity, capability completeness |

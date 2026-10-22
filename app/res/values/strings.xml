@@ -28,6 +28,12 @@
     <string name="settings_background_unavailable">This unit has no battery-optimization screen. Look for an autostart or background-apps setting in its own settings.</string>
     <string name="settings_background_hint">Starting at ignition happens in the background. Since Android 12 that is refused unless AiPlay is exempt from battery optimization. Older Android has no such limit.</string>
 
+    <!-- Hardware report -->
+    <string name="action_cpu_test">Run CPU test (8 s)</string>
+    <string name="action_cpu_testing">Testing %1$d/%2$d…</string>
+    <string name="toast_cpu_test_done">CPU test finished: %1$s</string>
+    <string name="cpu_test_warning">Loads every CPU core for 8 seconds. The unit may stutter, and the screen may lag while it runs.</string>
+
     <!-- Projection -->
     <string name="projection_waiting">Waiting for the phone\'s video…</string>
     <string name="projection_ended">The phone stopped projecting</string>

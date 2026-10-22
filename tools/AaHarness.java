@@ -119,9 +119,20 @@ public final class AaHarness {
             });
             session.begin();
 
+            socket.setSoTimeout(1000);
             byte[] buffer = new byte[65536];
-            while (session.pump(buffer) >= 0) {
-                // keep reading until the peer closes
+            while (true) {
+                try {
+                    if (session.pump(buffer) < 0) {
+                        break;
+                    }
+                } catch (java.net.SocketTimeoutException quiet) {
+                    // nothing this second
+                }
+                if (!session.tick(System.currentTimeMillis())) {
+                    System.out.println("    phone gone, closing");
+                    break;
+                }
             }
         } catch (Exception error) {
             System.out.println("session ended: " + error);

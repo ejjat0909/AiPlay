@@ -27,6 +27,10 @@ Acceptance: a real phone completes discovery **and** renders its UI on the head 
 - [ ] Session recording: store a real handshake as a replayable fixture
 - [ ] Compatibility database of observed phones/ROMs
 
+## Also done (0.2.0-alpha8)
+
+- [x] Hardware section in the Diagnostics report (chip, RAM, storage, heat, flashability) so one report can decide debloat vs firmware (docs/HARDWARE.md)
+
 ## 0.3.0 — Wired
 
 - [ ] USB AOA transport (`UsbManager`, accessory mode)

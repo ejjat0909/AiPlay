@@ -242,6 +242,14 @@ Verified by:
 
 The mutation checks that guard this are in the 0.2.0-alpha4 changelog entry.
 
+### 5.1 Keep-alive
+
+The head unit sends `PING_REQUEST` (channel 0, encrypted) every 5 s, the first one 5 s after TLS is up, and the
+phone answers `PING_RESPONSE`. Two pings in a row without an answer end the session; silence alone does not (a still
+map sends little). This is OpenAuto's policy (`Pinger(ioService, 5000)`; quit when pings sent minus pongs
+received is greater than one). A TLS handshake that has not finished after 15 s is abandoned. Whether a real phone
+also expects pings *from* the head unit to stay connected is unknown; AiPlay sends them either way.
+
 ## 6. Not implemented
 
 | Feature | Notes |

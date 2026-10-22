@@ -92,7 +92,13 @@ public final class Diag {
     }
 
     public static String report(Context context, DeviceProfile profile, Verdict verdict) {
-        StringBuilder out = new StringBuilder(4096);
+        return report(context, profile, verdict, "");
+    }
+
+    /** @param hardware the formatted hardware section ({@code HardwareReport}), or "" to omit it */
+    public static String report(Context context, DeviceProfile profile, Verdict verdict,
+                                String hardware) {
+        StringBuilder out = new StringBuilder(16384);
         out.append("AiPlay diagnostic report\n");
         out.append("========================\n\n");
         out.append("app version : ").append(version(context)).append('\n');
@@ -142,6 +148,10 @@ public final class Diag {
                         .append(" (").append(capability.evidence).append(")\n");
             }
             out.append('\n');
+        }
+
+        if (hardware != null && hardware.length() > 0) {
+            out.append(hardware);
         }
 
         out.append("log (").append(size()).append(" lines)\n---------------\n");

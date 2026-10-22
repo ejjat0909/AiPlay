@@ -22,7 +22,11 @@ import com.ejjat.aiplay.core.DeviceProfile;
 import com.ejjat.aiplay.core.ReadinessEngine;
 import com.ejjat.aiplay.core.Verdict;
 import com.ejjat.aiplay.device.CapabilityProbe;
+import com.ejjat.aiplay.core.hw.CpuBench;
+import com.ejjat.aiplay.core.hw.HardwareData;
+import com.ejjat.aiplay.core.hw.HardwareReport;
 import com.ejjat.aiplay.device.Diag;
+import com.ejjat.aiplay.device.HardwareProbe;
 import com.ejjat.aiplay.device.ReportStore;
 
 import java.io.File;
@@ -33,6 +37,8 @@ public final class DiagnosticsActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private TextView output;
     private String reportText = "";
+    private Button cpuTest;
+    private boolean testing;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,6 +61,19 @@ public final class DiagnosticsActivity extends Activity {
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         root.addView(scroll, scrollParams);
+
+        cpuTest = Ui.secondaryButton(this, getString(R.string.action_cpu_test));
+        LinearLayout.LayoutParams testParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 46));
+        testParams.setMargins(0, Ui.dp(this, 10), 0, 0);
+        cpuTest.setLayoutParams(testParams);
+        cpuTest.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                runCpuTest();
+            }
+        });
+        root.addView(cpuTest);
 
         LinearLayout actions = Ui.row(this);
         actions.setPadding(0, Ui.dp(this, 10), 0, 0);
@@ -110,7 +129,9 @@ public final class DiagnosticsActivity extends Activity {
             public void run() {
                 final DeviceProfile profile = CapabilityProbe.probe(DiagnosticsActivity.this);
                 final Verdict verdict = ReadinessEngine.evaluate(profile);
-                final String report = Diag.report(DiagnosticsActivity.this, profile, verdict);
+                final HardwareData hardware = HardwareProbe.collect(DiagnosticsActivity.this);
+                final String report = Diag.report(DiagnosticsActivity.this, profile, verdict,
+                        HardwareReport.format(hardware));
                 main.post(new Runnable() {
                     @Override
                     public void run() {
@@ -120,6 +141,54 @@ public final class DiagnosticsActivity extends Activity {
                 });
             }
         }, "aiplay-report").start();
+    }
+
+    /** Loads every core for 8 s on its own thread; the button shows the seconds, then the report is rebuilt. */
+    private void runCpuTest() {
+        if (testing) {
+            return;
+        }
+        testing = true;
+        cpuTest.setEnabled(false);
+        toast(getString(R.string.cpu_test_warning));
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String outcome;
+                try {
+                    CpuBench.Result result = HardwareProbe.runCpuTest(DiagnosticsActivity.this,
+                            new HardwareProbe.Progress() {
+                                @Override
+                                public void onSecond(final int done, final int total) {
+                                    main.post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            cpuTest.setText(getString(R.string.action_cpu_testing,
+                                                    done, total));
+                                        }
+                                    });
+                                }
+                            });
+                    outcome = result.verdict == null ? "done" : result.verdict.text;
+                } catch (InterruptedException interrupted) {
+                    outcome = "interrupted";
+                } catch (RuntimeException error) {
+                    Diag.log("hardware", "CPU test failed", error);
+                    outcome = "failed: " + error.getMessage();
+                }
+                final String message = outcome;
+                main.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        testing = false;
+                        cpuTest.setEnabled(true);
+                        cpuTest.setText(R.string.action_cpu_test);
+                        toast(getString(R.string.toast_cpu_test_done, message));
+                        collect();
+                    }
+                });
+            }
+        }, "aiplay-cpu-test").start();
     }
 
     private void save() {

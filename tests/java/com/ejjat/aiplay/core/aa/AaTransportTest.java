@@ -45,8 +45,15 @@ public class AaTransportTest {
         final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
         volatile AaSession session;
         final Thread thread;
+        final long pingMs;
 
         HeadUnit() throws Exception {
+            this(0);
+        }
+
+        /** @param pingMs when above 0, run the keep-alive exactly as AaServer does, at this interval */
+        HeadUnit(long pingMs) throws Exception {
+            this.pingMs = pingMs;
             server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"));
             thread = new Thread(this, "aiplay-test-head-unit");
             thread.start();
@@ -61,7 +68,7 @@ public class AaTransportTest {
             Socket socket = null;
             try {
                 socket = server.accept();
-                socket.setSoTimeout(10000);
+                socket.setSoTimeout(pingMs > 0 ? 25 : 10000);
                 session = new AaSession(socket.getInputStream(), socket.getOutputStream(),
                         new AaSession.Sink() {
                             @Override
@@ -93,10 +100,24 @@ public class AaTransportTest {
                     public void onVideoFocus(boolean focused) {
                     }
                 });
+                if (pingMs > 0) {
+                    session.setPingIntervalMillis(pingMs);
+                }
                 session.begin();
                 byte[] buffer = new byte[65536];
-                while (session.pump(buffer) >= 0) {
-                    // until the phone closes
+                while (true) {
+                    try {
+                        if (session.pump(buffer) < 0) {
+                            break;
+                        }
+                    } catch (java.net.SocketTimeoutException quiet) {
+                        if (pingMs <= 0) {
+                            throw quiet;
+                        }
+                    }
+                    if (pingMs > 0 && !session.tick(System.currentTimeMillis())) {
+                        break;
+                    }
                 }
             } catch (Throwable error) {
                 failure.set(error);
@@ -124,6 +145,8 @@ public class AaTransportTest {
         /** Every message the head unit sent, in order, with whether it was encrypted. */
         final List<AaFrame> received = new ArrayList<AaFrame>();
         boolean encrypting;
+        boolean answerPings;
+        int pingsSeen;
 
         FakePhone(int port) throws Exception {
             socket = new Socket(InetAddress.getByName("127.0.0.1"), port);
@@ -143,13 +166,65 @@ public class AaTransportTest {
                 }
                 parser.feed(buffer, 0, read, new AaFrameCodec.Listener() {
                     @Override
-                    public void onMessage(AaFrame frame) {
-                        inbox.add(frame);
+                    public void onMessage(AaFrame frame) throws IOException {
                         received.add(frame);
+                        if (frame.channel == AaChannel.CONTROL
+                                && frame.messageId == AaMessageType.PING_REQUEST) {
+                            pingsSeen++;
+                            if (answerPings) {
+                                try {
+                                    out.write(AaFrameCodec.encode(AaChannel.CONTROL, false,
+                                            AaMessageType.PING_RESPONSE, frame.payload,
+                                            encrypting ? tls : null));
+                                    out.flush();
+                                } catch (IOException error) {
+                                    throw error;
+                                }
+                            }
+                            return;         // keep-alive traffic is not what a test step waits for
+                        }
+                        inbox.add(frame);
                     }
                 });
             }
             return inbox.removeFirst();
+        }
+
+        /** Reads and answers whatever arrives for {@code millis}; false if the head unit hung up. */
+        boolean listenFor(long millis) throws Exception {
+            socket.setSoTimeout(50);
+            long end = System.currentTimeMillis() + millis;
+            byte[] buffer = new byte[65536];
+            while (System.currentTimeMillis() < end) {
+                try {
+                    int read = in.read(buffer);
+                    if (read < 0) {
+                        return false;
+                    }
+                    parser.feed(buffer, 0, read, new AaFrameCodec.Listener() {
+                        @Override
+                        public void onMessage(AaFrame frame) throws IOException {
+                            received.add(frame);
+                            if (frame.channel == AaChannel.CONTROL
+                                    && frame.messageId == AaMessageType.PING_REQUEST) {
+                                pingsSeen++;
+                                if (answerPings) {
+                                    out.write(AaFrameCodec.encode(AaChannel.CONTROL, false,
+                                            AaMessageType.PING_RESPONSE, frame.payload,
+                                            encrypting ? tls : null));
+                                    out.flush();
+                                }
+                            } else {
+                                inbox.add(frame);
+                            }
+                        }
+                    });
+                } catch (java.net.SocketTimeoutException quiet) {
+                    // nothing yet
+                }
+            }
+            socket.setSoTimeout(10000);
+            return true;
         }
 
         void send(int channel, boolean control, int id, byte[] payload) throws Exception {
@@ -396,5 +471,49 @@ public class AaTransportTest {
         }
         finish(unit);
         assertEquals(count, unit.pictures.size());
+    }
+
+    @Test
+    public void aSilentPhoneThatAnswersPingsStaysConnected() throws Exception {
+        HeadUnit unit = new HeadUnit(100);
+        FakePhone phone = new FakePhone(unit.port());
+        phone.answerPings = true;
+        try {
+            phone.connect();
+            // ten ping intervals of complete silence from the phone's side: no media, no requests
+            assertTrue("the head unit must not hang up on a phone that answers", phone.listenFor(1200));
+            assertTrue("pings reached the phone, encrypted: " + phone.pingsSeen, phone.pingsSeen >= 5);
+            for (AaFrame frame : phone.received) {
+                if (frame.messageId == AaMessageType.PING_REQUEST) {
+                    assertTrue("pings after TLS are encrypted", frame.encrypted);
+                    assertFalse("a ping is a channel-0 message: not CONTROL-flagged", frame.control);
+                }
+            }
+            // and the session still works afterwards
+            phone.send(AaChannel.CONTROL, false, AaMessageType.SERVICE_DISCOVERY_REQUEST,
+                    new ProtoWriter().string(4, "TestPhone").toByteArray());
+            assertEquals(AaMessageType.SERVICE_DISCOVERY_RESPONSE, phone.next().messageId);
+        } finally {
+            phone.close();
+        }
+        finish(unit);
+    }
+
+    @Test
+    public void aPhoneThatStopsAnsweringIsDroppedByTheHeadUnit() throws Exception {
+        HeadUnit unit = new HeadUnit(100);
+        FakePhone phone = new FakePhone(unit.port());
+        phone.answerPings = false;
+        try {
+            phone.connect();
+            boolean stillConnected = phone.listenFor(3000);
+            assertFalse("the head unit should have closed the connection", stillConnected);
+        } finally {
+            phone.close();
+        }
+        finish(unit);
+        assertTrue(unit.events.toString(), unit.events.toString().contains("stopped answering pings"));
+        assertTrue("exactly two unanswered pings were sent, then it hung up: " + phone.pingsSeen,
+                phone.pingsSeen == 2);
     }
 }

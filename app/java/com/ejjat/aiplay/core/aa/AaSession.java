@@ -86,6 +86,15 @@ public final class AaSession {
     /** Kept for callers written before audio existed. */
     public static final int VIDEO_MAX_UNACKED = MAX_UNACKED;
 
+    /**
+     * The head unit pings the phone this often (OpenAuto: {@code Pinger(ioService, 5000)}). The phone
+     * is declared gone when two pings are unanswered, not when no data has arrived: a phone showing
+     * a still map may send nothing for many seconds and is still there.
+     */
+    public static final long PING_INTERVAL_MS = 5000L;
+    /** How long TLS and auth may take before a silent connection is abandoned. */
+    public static final long HANDSHAKE_TIMEOUT_MS = 15000L;
+
     private static final int MAX_MESSAGE = AaFrameCodec.MAX_MESSAGE_PAYLOAD;
     private static final int LOG_EVERY_FRAMES = 150;
 
@@ -118,6 +127,12 @@ public final class AaSession {
     private volatile boolean nightSubscribed;
     private volatile boolean drivingSubscribed;
 
+    private long pingIntervalMs = PING_INTERVAL_MS;
+    private long startedAt = Long.MIN_VALUE;
+    private long lastPingAt = Long.MIN_VALUE;
+    private int pingsSent;
+    private int pongsReceived;
+
     /** Plaintext session (tests): no TLS handshake. */
     public AaSession(InputStream input, OutputStream output, Sink sink,
                      AaControl.ServiceDiscoveryConfig discovery) {
@@ -139,6 +154,58 @@ public final class AaSession {
     /** True once the TLS handshake finished and outgoing frames are being encrypted. */
     public boolean isEncrypted() {
         return encrypting;
+    }
+
+    /** For tests: how often the head unit pings. */
+    public void setPingIntervalMillis(long millis) {
+        this.pingIntervalMs = millis;
+    }
+
+    public int pingsSent() {
+        return pingsSent;
+    }
+
+    public int pongsReceived() {
+        return pongsReceived;
+    }
+
+    /**
+     * Keep-alive, called on the session thread every time a read comes back (with data or after a
+     * short timeout). Pings the phone when the interval has passed and reports whether it is still
+     * there.
+     *
+     * @return false when the connection should be dropped: two pings went unanswered, or the TLS
+     *         handshake never finished
+     */
+    public boolean tick(long nowMillis) throws IOException {
+        if (startedAt == Long.MIN_VALUE) {
+            startedAt = nowMillis;
+        }
+        boolean established = cryptor == null || encrypting;
+        if (!established) {
+            if (nowMillis - startedAt > HANDSHAKE_TIMEOUT_MS) {
+                event("no TLS handshake after " + HANDSHAKE_TIMEOUT_MS / 1000 + " s, giving up");
+                return false;
+            }
+            return true;
+        }
+        if (lastPingAt == Long.MIN_VALUE) {
+            lastPingAt = nowMillis;     // the first ping is one interval after the session is up
+            return true;
+        }
+        if (nowMillis - lastPingAt < pingIntervalMs) {
+            return true;
+        }
+        if (pingsSent - pongsReceived > 1) {
+            event("the phone stopped answering pings (" + pingsSent + " sent, " + pongsReceived
+                    + " answered)");
+            return false;
+        }
+        lastPingAt = nowMillis;
+        pingsSent++;
+        write(AaChannel.CONTROL, false, AaMessageType.PING_REQUEST,
+                AaControl.pingRequest(nowMillis * 1000L));       // quiet: one line per 5 s is noise
+        return true;
     }
 
     public void setVideoSink(VideoSink videoSink) {
@@ -271,6 +338,10 @@ public final class AaSession {
                 event("navigation focus request");
                 sendControl(AaMessageType.NAVIGATION_FOCUS_RESPONSE,
                         AaAudio.navigationFocusResponse());
+                break;
+            }
+            case AaMessageType.PING_RESPONSE: {
+                pongsReceived++;          // the answer to tick()'s ping; not worth a log line
                 break;
             }
             case AaMessageType.PING_REQUEST: {

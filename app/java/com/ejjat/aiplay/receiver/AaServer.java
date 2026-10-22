@@ -144,7 +144,9 @@ public final class AaServer {
     private void handle(Socket socket, int id) {
         AaSession attached = null;
         try {
-            socket.setSoTimeout(15000);
+            // Reads time out every second so the loop can run the keep-alive (AaSession.tick); a
+            // read timeout is not the end of the session.
+            socket.setSoTimeout(1000);
             socket.setTcpNoDelay(true);
 
             AaControl.ServiceDiscoveryConfig discovery = new AaControl.ServiceDiscoveryConfig();
@@ -170,7 +172,15 @@ public final class AaServer {
 
             byte[] buffer = new byte[65536];
             while (running.get()) {
-                if (session.pump(buffer) < 0) {
+                try {
+                    if (session.pump(buffer) < 0) {
+                        break;
+                    }
+                } catch (java.net.SocketTimeoutException quiet) {
+                    // nothing arrived this second; a half-received frame stays in the parser
+                }
+                if (!session.tick(android.os.SystemClock.elapsedRealtime())) {
+                    event("session " + id + ": phone gone, closing");
                     break;
                 }
             }

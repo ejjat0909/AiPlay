@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.ejjat.aiplay"
-    android:versionCode="13"
-    android:versionName="0.2.0-alpha7">
+    android:versionCode="14"
+    android:versionName="0.2.0-alpha8">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34" />
 
@@ -16,6 +16,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Hardware report: to see which head-unit vendor/updater packages are installed. Only matching
+         names are listed in the report, never the full app list. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <!-- Ignition start: since Android 12 an app in the background may not start a foreground service
          unless the user has exempted it from battery optimization (this lets AiPlay ask). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />

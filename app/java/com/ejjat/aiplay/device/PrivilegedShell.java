@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 public final class PrivilegedShell {
 
     private static final int TIMEOUT_SECONDS = 12;
+    private static final int DEFAULT_MAX_CHARS = 8192;
     private static volatile Boolean rootCache;
 
     /** Every location a real su binary has shipped in; a missing file means "no root", cheaply. */
@@ -90,14 +91,27 @@ public final class PrivilegedShell {
     }
 
     public static Result runAsRoot(String script) {
-        return exec(new String[]{"su", "-c", script}, TIMEOUT_SECONDS * 1000);
+        return exec(new String[]{"su", "-c", script}, TIMEOUT_SECONDS * 1000, DEFAULT_MAX_CHARS);
     }
 
     public static Result runShell(String script) {
-        return exec(new String[]{"sh", "-c", script}, TIMEOUT_SECONDS * 1000);
+        return exec(new String[]{"sh", "-c", script}, TIMEOUT_SECONDS * 1000, DEFAULT_MAX_CHARS);
+    }
+
+    /** Like {@link #runShell} for commands with long output (a full {@code getprop} is ~30 KB). */
+    public static Result runShellMax(String script, int maxChars) {
+        return exec(new String[]{"sh", "-c", script}, TIMEOUT_SECONDS * 1000, maxChars);
+    }
+
+    public static Result runAsRootMax(String script, int maxChars) {
+        return exec(new String[]{"su", "-c", script}, TIMEOUT_SECONDS * 1000, maxChars);
     }
 
     private static Result exec(String[] command, int timeoutMillis) {
+        return exec(command, timeoutMillis, DEFAULT_MAX_CHARS);
+    }
+
+    private static Result exec(String[] command, int timeoutMillis, int maxChars) {
         Process process = null;
         try {
             ProcessBuilder builder = new ProcessBuilder(command);
@@ -110,7 +124,7 @@ public final class PrivilegedShell {
             BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
             while ((line = reader.readLine()) != null) {
-                if (output.length() < 8192) {
+                if (output.length() < maxChars) {
                     output.append(line).append('\n');
                 }
             }
