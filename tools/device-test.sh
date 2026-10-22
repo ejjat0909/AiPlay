@@ -66,6 +66,10 @@ echo "== launch + receiver =="
 # The first full-screen app on a device shows Android's "Viewing full screen / Got it" box over the
 # picture. It is a system dialog, not an AiPlay bug, but it ruins the screenshot: pre-confirm it.
 "${ADB[@]}" shell settings put secure immersive_mode_confirmations confirmed >/dev/null 2>&1
+# The night-mode step below only means something from a known starting point: a previous run (or a
+# person) can leave the device in night mode, which turns "switch to night" into a no-op and leaves the
+# probe waiting for an event that never comes.
+"${ADB[@]}" shell cmd uimode night no >/dev/null 2>&1
 # AaReceiverService is not exported on purpose, so `am start-foreground-service` is denied for the
 # shell uid. The launcher activity is exported: ask the app to start its own receiver.
 "${ADB[@]}" shell am start -W -n "$PKG/.ui.SplashActivity" \
