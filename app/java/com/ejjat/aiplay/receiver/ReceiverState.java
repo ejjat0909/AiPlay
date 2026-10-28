@@ -35,6 +35,9 @@ public final class ReceiverState {
     private static volatile State state = State.STOPPED;
     private static volatile String detail = "";
     private static volatile String bluetooth = "";
+    /** The Wi-Fi network the unit offers the phone. Memory only: never logged, never in a report. */
+    private static volatile String wifiName = "";
+    private static volatile String wifiPassword = "";
     private static final Runnable TIMEOUT = new Runnable() {
         @Override
         public void run() {
@@ -61,6 +64,16 @@ public final class ReceiverState {
         return bluetooth;
     }
 
+    /** Name of the unit's own Wi-Fi network for the phone, or "" when there is none. */
+    public static String wifiName() {
+        return wifiName;
+    }
+
+    /** Its password, for showing on screen so a person can join by hand. Never log it. */
+    public static String wifiPassword() {
+        return wifiPassword;
+    }
+
     public static void addListener(Listener listener) {
         LISTENERS.addIfAbsent(listener);
         listener.onReceiverState(state, detail);
@@ -81,7 +94,15 @@ public final class ReceiverState {
         }
         if (next == State.STOPPED || next == State.FAILED) {
             bluetooth = "";
+            wifiName = "";
+            wifiPassword = "";
         }
+        notifyListeners();
+    }
+
+    static void setWifi(String name, String password) {
+        wifiName = name == null ? "" : name;
+        wifiPassword = password == null ? "" : password;
         notifyListeners();
     }
 

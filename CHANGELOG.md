@@ -2,6 +2,58 @@
 
 All notable changes to AiPlay. Format follows Keep a Changelog; versions follow SemVer.
 
+## [0.2.0-alpha10] - 2026-10-23
+
+First measurements of the Bluetooth bootstrap on a real unit (alps 8227L_demo, API 27) with a real phone
+(OPPO CPH2739, Android 16). The phone was paired and connected over A2DP, Hands-Free and AVRCP, and AiPlay
+said "Bluetooth: waiting for a phone" indefinitely. A Bluetooth HCI capture (`btsnoop`) showed why: the phone
+asked the unit for Hands-Free, AVRCP and A2DP-sink service records and **never searched for the Android Auto
+service** (`4de17a00-52cb-11e6-bdf4-0800200c9a66`), and never opened an RFCOMM connection.
+
+### Cause found
+
+* **Receiver off at pairing time.** `auto_start_receiver` defaulted to false, so after a fresh install or a
+  data wipe AiPlay only started when someone opened it, *after* the phone had paired. Android caches a paired
+  device's services at bonding, so the phone kept a picture of a unit with no Android Auto service.
+
+### Changed
+
+* **The receiver now starts at boot by default** (`Prefs.autoStartReceiver()` is true), so the service is
+  registered before anyone pairs.
+* **Pairing advice** (`core/bt/PairingAdvisor`, tested): the Bluetooth line says what to do next (pair now,
+  re-pair, open Android Auto) and the log carries the longer explanation. A bond created while the service
+  was down is flagged.
+* **Bluetooth being switched off and on** re-registers the service (it used to fail once and stay failed); a
+  dead server socket is reopened after 3 s instead of leaving the receiver silently deaf.
+* **Events logged under `bluetooth:`**: pairing started/finished/removed (and whether the service was up),
+  link up/down, scan mode, paired devices at start.
+* **Optional BLE advertisement** of the Android Auto UUID (`BleAdvertiser`), as the dongle's "dongle mode"
+  does. It is skipped, with the reason in the log, on units whose Bluetooth has no LE peripheral mode, which
+  includes the unit above (`android.hardware.bluetooth_le` is absent).
+
+### Fixed: the phone's `WifiConnectStatus = -3`
+
+* **`bssid` was sent empty** for the unit's own Wi-Fi Direct network. The phone answered
+  `WifiConnectStatus = -3` 13 ms after its `WifiStartResponse` (too fast to be a join attempt) and never
+  opened TCP. With the group owner's address filled in (`WifiP2pGroup.getOwner().deviceAddress`, equal to the
+  supplicant's `bssid`) the phone answers `0`, joins, and **opens the TCP connection to port 5277**.
+  First measured contact between a real phone and the receiver.
+
+### Measured: where the session now stops
+
+Real phone (Android 16, Android Auto): TCP accepted, `VERSION_REQUEST` answered (phone speaks 1.7, status 0),
+TLS started with the head unit as client, the phone's first handshake flight answered with AiPlay's
+certificate flight (1168 B) and then **the phone closes the connection within 50 to 300 ms, every time**,
+with no alert read. **Confirmed by the phone** (OPPO CPH2739, Android Auto): "Communication error 7 - Your car's
+software didn't pass Android Auto security checks." That is the open question in docs/PROTOCOL.md 2.4,
+answered: a current phone rejects AiPlay's self-signed head-unit identity.
+
+### Still unverified
+
+* Whether the phone, once it has paired with the service present, opens the RFCOMM connection. That is the
+  next measurement.
+* Whether the phone accepts AiPlay's self-signed identity after the Wi-Fi step (docs/PROTOCOL.md 2.4).
+
 ## [0.2.0-alpha9] - 2026-10-22
 
 The first report from a real head unit (alps 8227L_demo, API 27, 32-bit quad Cortex-A7, firmware

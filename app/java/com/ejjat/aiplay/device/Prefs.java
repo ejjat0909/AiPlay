@@ -79,8 +79,13 @@ public final class Prefs {
         p().edit().putInt(KEY_RECEIVER_PORT, port).apply();
     }
 
+    /**
+     * On by default: a phone only learns that the unit offers wireless Android Auto if the unit's
+     * Bluetooth service is registered when the two are paired, so the receiver has to be running
+     * before anyone pairs, not after they open the app.
+     */
     public static boolean autoStartReceiver() {
-        return p().getBoolean(KEY_AUTO_START_RECEIVER, false);
+        return p().getBoolean(KEY_AUTO_START_RECEIVER, true);
     }
 
     public static void setAutoStartReceiver(boolean value) {

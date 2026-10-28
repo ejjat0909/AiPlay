@@ -35,6 +35,7 @@ public final class AaReceiverService extends Service {
     private AaServer server;
     private MdnsAdvertiser advertiser;
     private BluetoothBootstrapServer bluetooth;
+    private WifiDirectGroup wifiGroup;
 
     public static boolean isRunning() {
         return RUNNING.get();
@@ -144,6 +145,10 @@ public final class AaReceiverService extends Service {
 
         // Optional: without Bluetooth the receiver still works for a client that already knows
         // its address (the test rig). It just cannot be found by a phone.
+        // The network the phone is sent must exist before the phone asks for it.
+        wifiGroup = new WifiDirectGroup(this);
+        wifiGroup.start();
+
         bluetooth = new BluetoothBootstrapServer(this);
         bluetooth.start();
         ReceiverState.set(ReceiverState.State.RUNNING, "");
@@ -182,6 +187,10 @@ public final class AaReceiverService extends Service {
         if (bluetooth != null) {
             bluetooth.stop();
             bluetooth = null;
+        }
+        if (wifiGroup != null) {
+            wifiGroup.stop();
+            wifiGroup = null;
         }
         if (advertiser != null) {
             advertiser.stop();

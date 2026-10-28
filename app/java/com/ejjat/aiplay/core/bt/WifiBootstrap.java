@@ -238,7 +238,7 @@ public final class WifiBootstrap {
             reader.feed(buffer, 0, read, batch);
             for (Message message : batch) {
                 result.received.add(message.toString());
-                event(sink, "received " + message);
+                event(sink, "received " + message + payloadHex(message));
                 if (message.id == WIFI_INFO_REQUEST && !result.infoSent) {
                     result.infoRequested = true;
                     if (config.ssid.length() == 0) {
@@ -263,6 +263,26 @@ public final class WifiBootstrap {
                 }
             }
         }
+    }
+
+    /**
+     * The phone's WifiVersionResponse / WifiConnectStatus / WifiStartResponse payloads are not
+     * documented, so log them: the first measurement against a real phone needs the bytes. Bounded and
+     * only for the messages AiPlay does not decode; WifiInfoRequest is empty.
+     */
+    static String payloadHex(Message message) {
+        if (message.payload.length == 0) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder(" hex=");
+        int n = Math.min(message.payload.length, 32);
+        for (int i = 0; i < n; i++) {
+            builder.append(String.format("%02x", message.payload[i] & 0xff));
+        }
+        if (message.payload.length > n) {
+            builder.append("...");
+        }
+        return builder.toString();
     }
 
     private static void event(Sink sink, String message) {

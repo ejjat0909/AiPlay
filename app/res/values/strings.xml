@@ -113,6 +113,10 @@
     <string name="receiver_starting">Starting the receiver…</string>
     <string name="receiver_failed">Receiver did not start: %1$s</string>
     <string name="receiver_bluetooth">Bluetooth: %1$s</string>
+    <string name="wifi_for_phone">Wi-Fi for the phone: %1$s</string>
+    <string name="wifi_scan_to_join">Scan with the phone camera to join this Wi-Fi:</string>
+    <string name="wifi_password">Password: %1$s</string>
+    <string name="wifi_from_settings">Wi-Fi for the phone: %1$s (set in Settings; clear it there to use the unit\'s own network)</string>
     <string name="toast_receiver_ready">Receiver is ready</string>
     <string name="toast_receiver_failed">Receiver did not start: %1$s</string>
     <string name="notification_channel">Receiver</string>

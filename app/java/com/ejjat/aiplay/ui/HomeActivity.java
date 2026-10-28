@@ -52,6 +52,12 @@ public final class HomeActivity extends Activity {
     private TextView statusBody;
     private TextView deviceLine;
     private TextView receiverLine;
+    /** Network name and password the phone can join. Not written to the diagnostic log. */
+    private TextView wifiLine;
+    private LinearLayout wifiBox;
+    /** Scan to join the unit's Wi-Fi network; shown only while the unit hosts its own. */
+    private com.ejjat.aiplay.ui.view.QrView wifiQr;
+    private String wifiQrPayload = "";
     private Button primary;
     private Button receiverToggle;
     private ProgressBar receiverSpinner;
@@ -218,6 +224,17 @@ public final class HomeActivity extends Activity {
         receiverLine = Ui.caption(this, "");
         receiverRow.addView(receiverLine);
         right.addView(receiverRow);
+
+        // Network text on the left, the QR code beside it, so it fits on the first screen.
+        wifiBox = Ui.row(this);
+        wifiBox.setPadding(0, Ui.dp(this, 8), 0, 0);
+        wifiBox.setVisibility(View.GONE);
+        wifiLine = Ui.text(this, "", 15, Ui.TEXT1);
+        wifiBox.addView(wifiLine, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        wifiQr = new com.ejjat.aiplay.ui.view.QrView(this);
+        wifiQr.setVisibility(View.GONE);
+        wifiBox.addView(wifiQr, new LinearLayout.LayoutParams(Ui.dp(this, 150), Ui.dp(this, 150)));
+        right.addView(wifiBox);
 
         hero.addView(right);
         return hero;
@@ -483,6 +500,56 @@ public final class HomeActivity extends Activity {
         }
     }
 
+    /**
+     * Shows the unit's own Wi-Fi network as text and as a QR code to scan. Deliberately not passed to
+     * Diag: the password must not reach the log or a saved report.
+     */
+    private void updateWifiLine(ReceiverState.State state) {
+        if (wifiLine == null) {
+            return;
+        }
+        String typed = Prefs.wifiSsid();
+        if (state == ReceiverState.State.RUNNING && typed.length() > 0) {
+            // A network typed into Settings overrides the unit's own one: say so, name only.
+            wifiLine.setText(getString(R.string.wifi_from_settings, typed));
+            wifiBox.setVisibility(View.VISIBLE);
+            showQr(null);
+            return;
+        }
+        String name = ReceiverState.wifiName();
+        if (state != ReceiverState.State.RUNNING || name.length() == 0) {
+            wifiBox.setVisibility(View.GONE);
+            showQr(null);
+            return;
+        }
+        wifiLine.setText(getString(R.string.wifi_scan_to_join) + "\n"
+                + getString(R.string.wifi_for_phone, name) + "\n"
+                + getString(R.string.wifi_password, ReceiverState.wifiPassword()));
+        wifiBox.setVisibility(View.VISIBLE);
+        showQr(com.ejjat.aiplay.core.qr.WifiQr.payload(name, ReceiverState.wifiPassword()));
+    }
+
+    private void showQr(String payload) {
+        if (wifiQr == null) {
+            return;
+        }
+        if (payload == null) {
+            wifiQrPayload = "";
+            wifiQr.setVisibility(View.GONE);
+            return;
+        }
+        if (!payload.equals(wifiQrPayload)) {
+            try {
+                wifiQr.setCode(com.ejjat.aiplay.core.qr.QrCode.encodeText(payload));
+                wifiQrPayload = payload;
+            } catch (IllegalArgumentException tooLong) {
+                wifiQr.setVisibility(View.GONE);
+                return;
+            }
+        }
+        wifiQr.setVisibility(View.VISIBLE);
+    }
+
     private void updateReceiverLine() {
         if (receiverLine == null) {
             return;
@@ -512,6 +579,7 @@ public final class HomeActivity extends Activity {
         com.ejjat.aiplay.device.Diag.log("home", "receiver line shows: "
                 + text.replace('\n', '|') + " (" + state + ")");
         receiverLine.setTextColor(state == ReceiverState.State.FAILED ? Ui.WARN : Ui.TEXT2);
+        updateWifiLine(state);
         if (receiverSpinner != null) {
             receiverSpinner.setVisibility(state == ReceiverState.State.STARTING
                     ? View.VISIBLE : View.GONE);

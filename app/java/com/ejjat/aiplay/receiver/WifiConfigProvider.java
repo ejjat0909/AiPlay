@@ -5,6 +5,7 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 
 import com.ejjat.aiplay.core.bt.WifiBootstrap;
+import com.ejjat.aiplay.core.bt.WifiSelection;
 import com.ejjat.aiplay.device.Diag;
 import com.ejjat.aiplay.device.Prefs;
 
@@ -22,9 +23,9 @@ import java.util.List;
  * <ul>
  *   <li><b>IP address</b>: read from the unit's own network interfaces (Wi-Fi first), never
  *       typed in. The port is the receiver's configured port.</li>
- *   <li><b>SSID and password</b>: from Settings. Android does not let an app read the password of
- *       the network it is on, so it has to be entered once. If no SSID is set, the current
- *       network's name is used when Android will say it.</li>
+ *   <li><b>SSID and password</b>: a network typed into Settings, else the Wi-Fi Direct group the
+ *       unit creates ({@link WifiDirectGroup}), else the network the unit is on
+ *       ({@link WifiSelection} has the precedence and its reasons).</li>
  *   <li><b>BSSID</b>: the access point's address, from the current connection when Android reveals
  *       it (needs the location permission), else left empty.</li>
  * </ul>
@@ -39,32 +40,60 @@ final class WifiConfigProvider {
         config.port = Prefs.receiverPort();
         config.ipAddress = localIpv4();
 
-        String ssid = Prefs.wifiSsid();
-        String bssid = "";
+        String currentSsid = "";
+        String currentBssid = "";
         try {
             WifiManager manager = (WifiManager) context.getApplicationContext()
                     .getSystemService(Context.WIFI_SERVICE);
             WifiInfo info = manager == null ? null : manager.getConnectionInfo();
             if (info != null) {
-                String current = clean(info.getSSID());
-                if (ssid.length() == 0 && current.length() > 0 && !"<unknown ssid>".equals(current)) {
-                    ssid = current;
-                }
+                currentSsid = clean(info.getSSID());
                 String address = info.getBSSID();
                 // Without the location permission Android reports a fixed placeholder.
                 if (address != null && !"02:00:00:00:00:00".equals(address)) {
-                    bssid = address;
+                    currentBssid = address;
                 }
             }
         } catch (RuntimeException error) {
             Diag.log("bluetooth", "could not read the Wi-Fi connection", error);
         }
-        config.ssid = ssid;
-        config.bssid = bssid;
-        config.key = Prefs.wifiKey();
-        config.securityMode = config.key.length() == 0
-                ? WifiBootstrap.SECURITY_OPEN : WifiBootstrap.SECURITY_WPA2_PERSONAL;
+
+        WifiDirectGroup.Info group = WifiDirectGroup.info();
+        WifiSelection.Choice choice = WifiSelection.choose(Prefs.wifiSsid(), Prefs.wifiKey(),
+                group == null ? "" : group.ssid, group == null ? "" : group.passphrase, currentSsid);
+        config.ssid = choice.ssid;
+        config.key = choice.key;
+        config.securityMode = choice.securityMode;
+        switch (choice.source) {
+            case UNIT_GROUP:
+                // The unit's own network: the receiver is at the group owner's address, and the
+                // BSSID is the group owner's hardware address.
+                config.ipAddress = WifiDirectGroup.ipOf(group.iface);
+                config.bssid = group.bssid;
+                break;
+            case CURRENT_NETWORK:
+                config.bssid = currentBssid;
+                break;
+            default:
+                config.bssid = "";
+                break;
+        }
+        Diag.log("bluetooth", "Wi-Fi for the phone: " + describe(choice.source));
         return config;
+    }
+
+    private static String describe(WifiSelection.Source source) {
+        switch (source) {
+            case MANUAL:
+                return "the network set in Settings";
+            case UNIT_GROUP:
+                return "the unit's own Wi-Fi Direct network";
+            case CURRENT_NETWORK:
+                return "the network the unit is on (a phone hotspot cannot be joined by the phone "
+                        + "that hosts it; set a network in Settings or allow Wi-Fi Direct)";
+            default:
+                return "none available";
+        }
     }
 
     private static String clean(String ssid) {

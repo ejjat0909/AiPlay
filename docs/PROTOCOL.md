@@ -300,6 +300,25 @@ nisargjhaveri/WirelessAndroidAutoDongle (`bluetoothProfiles.cpp`, `bluetoothHand
 so the sequence is believable, but it was read, not independently confirmed, and the dongle simply reads
 (and ignores) the last two messages, so their content is unknown to AiPlay.
 
+### 8.2a Measured on a real unit (0.2.0-alpha10)
+
+An HCI capture of a real phone (Android 16, Android Auto installed) paired with a real unit showed the phone
+sending SDP searches for Hands-Free, AVRCP and A2DP-sink only: no search for `4de17a00-...`, no RFCOMM
+connection. The phone had paired when AiPlay was not running, which is the leading explanation (Android
+caches a bonded device's service records at bonding). The unit's Bluetooth also has no LE peripheral mode, so
+the dongle's BLE advertisement is not available there. Next measurement: forget the unit on the phone, pair
+again with the receiver running, and look for the phone's search for the service UUID in a new capture.
+
+### 8.2b Measured next (0.2.0-alpha10): bootstrap works, the TLS step is where it stops
+
+With the service present at pairing, the phone opens the RFCOMM service and completes the bootstrap. Two
+corrections came from the capture: the unit must name a network it really hosts (a Wi-Fi Direct group), and
+`bssid` must be filled in (empty gave `WifiConnectStatus = -3`; the group owner's address gave `0`). The phone
+then joins, opens TCP, answers the version request (1.7) and starts TLS, then closes within 300 ms of
+receiving AiPlay's client certificate. **The phone showed "Communication error 7 - Your car's software didn't
+pass Android Auto security checks"**, which answers 2.4: a self-signed head-unit identity is rejected by a
+current phone. The decision recorded there still stands (no borrowed credential).
+
 ### 8.2 What is not implemented, and why a phone may still not connect
 
 The dongle does more than listen. It also **advertises the UUID over BLE** and, outside dongle mode,
